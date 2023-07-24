@@ -19,5 +19,7 @@ def read_xml(path_or_str):
         print(f"root_node.nodeType = {root_node.nodeType}")  # 结点类型  （元素结点，文本结点，属性结点）
         print(f"root_node.childNodes = {root_node.childNodes}")  # 所有子节点，为列表
 
+        print(root_node.childNodes[1].attributes)
+
 if __name__ == "__main__":
     read_xml("/home/wh/Desktop/code/python_note/xml/test.xml")
