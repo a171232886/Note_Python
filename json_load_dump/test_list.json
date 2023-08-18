@@ -1,0 +1,23 @@
+[
+    {
+        "z1": {
+            "name": "z1",
+            "key": 1.1, 
+            "flag": true
+        }
+    },
+    {
+        "z2": {
+            "name": "z2",
+            "key": 1.1, 
+            "flag": true
+        }
+    },
+    {
+        "z3": {
+            "name": "z3",
+            "key": 1.3, 
+            "flag": true
+        }
+    }
+]
