@@ -2,8 +2,7 @@ import asyncio
 import time
 
 """
-将corountine object变为task的方法：
-await方式：await <corountine object>
+await：await <corountine object>
 
 await say_after(1, "hello")程序执行动作：
 1. 将corountine object变为task 
