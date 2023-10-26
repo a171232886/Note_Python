@@ -18,8 +18,8 @@ def gen(num):
     
     # 在生成器函数中的return <value>，
     # 等价于 raise StopIteration
-    # 获取 <value> 需要 catch StopIteration
-    return
+    # 获取 <value> 需要 try-catch StopIteration
+    return 20
 
 # g是生成器对象
 g = gen(5)
@@ -27,3 +27,10 @@ g = gen(5)
 # 迭代器的用法
 for i in g:
     print(i)
+
+f = gen(5)
+try:
+    while True:
+        value = next(f)
+except StopIteration as e:
+    print(f"StopIteration: {e.value}")
