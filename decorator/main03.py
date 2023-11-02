@@ -25,5 +25,6 @@ def func(x):
 
 # 装饰器写法相当于 func = timeit(func)
 
+
 func = timeit(func)
 func(1)
