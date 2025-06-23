@@ -12,17 +12,20 @@
 
    JSONPath 有多种实现，此处使用`jsonpath-ng`
 
-   ```
+   ```bash
    pip install jsonpath-ng
    ```
+
+   https://pypi.org/project/jsonpath-ng/
 
    
 
 2. 基础使用
 
+   **直接使用增强版`from jsonpath_ng.ext import parse`**
+   
    ```python
-   import json
-   from jsonpath_ng import parse
+   from jsonpath_ng.ext import parse
    
    # 示例 JSON 数据
    data = {
@@ -58,26 +61,14 @@
 
 
 
-3. JSONPath 表达式总是以 `$` 开头，表示 JSON 文档的根对象。
+3. JSONPath 表达式总是以 `$` 开头，表示 JSON 文档的根对象
 
-   路径使用点表示法 `.` 或方括号表示法 `[]` 来导航层次结构。
+   路径使用点表示法 `.` 或方括号表示法 `[]` 来导航层次结构
 
-   
-
-   ```
-   $.store.book[0].title
-   ```
-
-   与
-
-   ```
-   $['store']['book'][0]['title']
-   ```
-
-   效果相同。
+   - `$.store.book[0].title` 与 `$['store']['book'][0]['title']` 效果相同。
 
    但推荐使用`.`来表示成员
-
+   
    
 
 3. JSONPath表达式编写基础规则
@@ -246,7 +237,7 @@ JSONPath 中的选择器(selector)是指用于从 JSON 结构中定位和提取�
 
 # 5. 示例
 
-**示例 JSON 数据**
+## 5.1 示例 JSON 数据
 
 ```json
 {
@@ -277,7 +268,7 @@ JSONPath 中的选择器(selector)是指用于从 JSON 结构中定位和提取�
 
 
 
-**实用查询示例**
+## 5.2 实用查询示例
 
 1. 获取所有书籍的作者：
 
@@ -295,23 +286,7 @@ JSONPath 中的选择器(selector)是指用于从 JSON 结构中定位和提取�
 
 
 
-3. 获取 store 下的所有元素：
-
-   ```
-   $.store.*
-   ```
-
-
-
-4. 获取所有价格：
-
-   ```
-   $..price
-   ```
-
-
-
-5. 获取第三本书：
+3. 获取第三本书：
 
    ```
    $.store.book[2]
@@ -319,15 +294,7 @@ JSONPath 中的选择器(selector)是指用于从 JSON 结构中定位和提取�
 
 
 
-6. 获取最后一本书：
-
-   ```
-   $.store.book[-1]
-   ```
-
-
-
-7. 获取前两本书：
+4. 获取前两本书：
 
    ```
    $.store.book[0:2]
@@ -335,15 +302,7 @@ JSONPath 中的选择器(selector)是指用于从 JSON 结构中定位和提取�
 
 
 
-8. 获取有 ISBN 号的书：
-
-   ```
-   $.store.book[?(@.isbn)]
-   ```
-
-
-
-9. 获取价格低于 10 的书：
+5. 获取价格低于 10 的书：
 
    ```
    $.store.book[?(@.price < 10)]
@@ -351,9 +310,83 @@ JSONPath 中的选择器(selector)是指用于从 JSON 结构中定位和提取�
 
    
 
-10. 获取所有书名和价格：
+6. 获取所有书名和价格：
 
     ```
     $.store.book[*]['title','price']
     ```
+
+
+
+## 5.3 代码与输出
+
+```python
+from jsonpath_ng.ext import parse
+
+data = {
+    "store": {
+        "book": [
+            {
+                "category": "reference",
+                "author": "Nigel Rees",
+                "title": "Sayings of the Century",
+                "price": 8.95
+            },
+            {
+                "category": "fiction",
+                "author": "Evelyn Waugh",
+                "title": "Sword of Honour",
+                "price": 12.99
+            }
+        ],
+        "bicycle": {
+            "color": "red",
+            "price": 19.95
+        }
+    }
+}
+
+
+def print_parse_match(expression):
+    jsonpath_expr = parse(expression)
+    matches = jsonpath_expr.find(data)
+    print(f"========= Matches for '{expression}': {len(matches)} =============")
+    
+    for match in matches:
+        print(match.value)
+
+
+
+if __name__ == "__main__":
+    expressions = [
+        "$.store.book[:].author",
+        "$..price",
+        "$.store.book[?(@.price == 8.95)]",
+        "$.store.book[*]['title', 'price']"
+    ]
+    
+    for expr in expressions:
+        print_parse_match(expr)
+```
+
+
+
+输出
+
+```bash
+========= Matches for '$.store.book[:].author': 2 =============
+Nigel Rees
+Evelyn Waugh
+========= Matches for '$..price': 3 =============
+8.95
+12.99
+19.95
+========= Matches for '$.store.book[?(@.price == 8.95)]': 1 =============
+{'category': 'reference', 'author': 'Nigel Rees', 'title': 'Sayings of the Century', 'price': 8.95}
+========= Matches for '$.store.book[*]['title', 'price']': 4 =============
+Sayings of the Century
+8.95
+Sword of Honour
+12.99
+```
 
