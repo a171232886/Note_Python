@@ -58,10 +58,10 @@ except Exception as e:
    - 使用jsonschema库时不需要
    - 通常均为2020-12版本（最新）
 
-   ```json
+   ```python
    {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
-     // 其他规则...
+     # 其他规则...
    }
    ```
 
@@ -71,9 +71,9 @@ except Exception as e:
 
    使用 `type` 关键字定义数据类型：
 
-   ```json
+   ```python
    {
-     "type": "string"  // 可以是 string, number, integer, boolean, array, object, null
+     "type": "string"  # 可以是 string, number, integer, boolean, array, object, null
    }
    ```
 
@@ -311,17 +311,161 @@ except Exception as e:
 
 
 
-## 2.3 组合模式
+## 2.3 条件验证
 
-- `allOf`: 必须满足所有子模式
+使用 `if`, `then`, `else` 实现条件验证：
 
-- `anyOf`: 满足任意一个子模式
+```python
+{
+    "type": "object",
+    "properties": {
+        "age": {"type": "number"},
+        "driver_license": {"type": "string"}
+    },
+    "if": {
+        "properties": {
+            "age": {"minimum": 18}
+        }
+    },
+    "then": {
+        "required": ["driver_license"],
+        "properties": {
+            "driver_license": {"pattern": "^[A-Z]{2}\\d{6}$"}
+        }
+    },
+    "else": {
+        "properties": {
+            "driver_license": {"const": None}
+        }
+    }
+}
+```
 
-- `oneOf`: 必须满足且仅满足一个子模式
+相当于设计了两种模式，
 
-- `not`: 不能匹配指定模式
+- 当`age`大于`18`时，可以有驾照
 
-```json
+  ```
+  {"age": 25, "driver_license": "AB123456"}
+  ```
+
+  
+
+- 否则，驾照是None
+
+  ```
+  {"age": 16, "driver_license": None}
+  ```
+
+
+
+1. **不推荐使用，建议分支判断直接写在程序中**
+
+2. 此外还有更复杂的
+   - `dependentRequired` - 根据某个字段是否存在来决定其他字段是否必需
+   - `dependentSchemas` - 根据某个字段是否存在来应用不同的 schema
+
+
+
+## 2.4 组合模式
+
+### 2.4.1 allOf
+
+**必须满足所有子模式**
+
+1. 主要用于直接使用多个json schema文件
+
+   ```python
+   schema = {
+       "type": "object",
+       "allOf": [
+       	# schema1.json
+       	# schema2.json
+       ]
+   }    
+   ```
+
+   
+
+2. 样例
+
+   ```python
+   schema = {
+       "type": "object",
+       "allOf": [
+           {
+               "properties": {
+                   "username": {"type": "string", "minLength": 3}
+               },
+               "required": ["username"]
+           },
+           {
+               "properties": {
+                   "password": {"type": "string", "minLength": 8}
+               },
+               "required": ["password"]
+           },
+           {
+               "properties": {
+                   "age": {"type": "integer", "minimum": 18}
+               }
+           }
+       ]
+   }
+   ```
+
+   
+
+3. 在 JSON Schema 中直接列出多个属性验证规则时，它们会以 **"逻辑与"（AND）** 的方式工作
+
+   ```python
+   {
+     "type": "object",
+     "properties": {
+       "username": { "type": "string", "minLength": 3 },
+       "age": { "type": "number", "minimum": 18 }
+     }
+   }
+   ```
+
+   但`allOf`可以做到（针对多个文件）
+
+   ```python
+   {
+     "allOf": [
+       { "properties": { "username": { "type": "string" } } },
+       { "properties": { "username": { "minLength": 3 } } }
+     ]
+   }
+   ```
+
+   
+
+### 2.4.2 anyOf
+
+**满足任意一个子模式**
+
+```python
+{
+    "type": "object",
+    "properties": {
+        "contact": {
+            "anyOf": [
+                {"type": "string", "format": "email"},
+                {"type": "string", "pattern": "^\\+?[0-9]{10,15}$"}
+            ]
+        }
+    }
+}
+```
+
+
+
+### 2.4.3 oneOf
+
+**必须满足且仅满足一个子模式**
+
+```python
 {
   "oneOf": [
     { "type": "string", "maxLength": 5 },
@@ -332,7 +476,44 @@ except Exception as e:
 
 
 
-## 2.4 条件验证
+### 2.4.2 not
+
+ **不能匹配指定模式**
+
+```python
+{
+    "type": "object",
+    "properties": {
+        "username": {
+            "type": "string",
+            "minLength": 3,
+            "not": {"enum": ["admin", "root", "superuser"]}
+        }
+    },
+    "required": ["username"]
+}
+```
+
+
+
+```python
+def test_not(data):
+    try:
+        validate(instance=data, schema=schema)
+        print(f"✅ 有效: {data}")
+    except ValidationError as e:
+        print(f"❌ 无效: {data}\n  原因: {e.message}")
+
+# 有效 - 不是禁止的用户名
+test_not({"username": "john_doe"})
+
+# 无效 - 使用了禁止的用户名
+test_not({"username": "admin"})
+```
+
+
+
+
 
 
 
@@ -363,74 +544,7 @@ except Exception as e:
 
 
 
-## 2.6 样例
 
-```python
-{
-  "type": "object",
-  "properties": {
-    "username": {
-      "type": "string",
-      "minLength": 4,
-      "maxLength": 20,
-      "pattern": "^[a-z0-9_]+$"  #正则：只允许小写字母、数字和下划线
-    },
-    "role": {
-      "type": "string",
-      "enum": ["admin", "user", "guest"]  # 枚举值
-    },
-    "age": {
-      "type": "integer",
-      "minimum": 18,
-      "maximum": 99
-    },
-    "email": {
-      "type": "string",
-      "format": "email",
-      "pattern": ".+@.+\\..+"  # 简单邮箱正则
-    },
-    "contact": {				# 结构嵌套
-      "type": "object",
-      "properties": {
-        "email": {
-          "type": "string",
-          "format": "email"
-        },
-        "phone": {
-          "type": "string",
-          "pattern": "^\\+?[0-9]{10,15}$"
-        }
-      },
-      "required": ["email"]
-    }
-  },
-  "required": ["username", "email"]
-}
-```
-
-
-
-2. 引用和复用
-
-   ```python
-   schema = {
-       "definitions": {
-           "address": {
-               "type": "object",
-               "properties": {
-                   "street": {"type": "string"},
-                   "city": {"type": "string"}
-               },
-               "required": ["street", "city"]
-           }
-       },
-       "type": "object",
-       "properties": {
-           "home_address": {"$ref": "#/definitions/address"},
-           "work_address": {"$ref": "#/definitions/address"}
-       }
-   }
-   ```
 
 
 
@@ -466,8 +580,6 @@ except Exception as e:
 
    
 
-
-
 2. 错误对象属性
 
    `ValidationError` 对象包含以下有用属性：
@@ -485,12 +597,25 @@ except Exception as e:
 
 
 
+
+
 ## 3.2 获取多个错误
 
 默认情况下，`validate()` 在遇到第一个错误时就停止。要收集所有错误，使用验证器实例：
 
 ```python
 from jsonschema import Draft7Validator
+
+schema = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "age": {"type": "integer"}
+    },
+    "required": ["name"]
+}
+
+data = {"age": "30"}  # 错误：age应该是整数，且缺少name
 
 validator = Draft7Validator(schema)
 errors = sorted(validator.iter_errors(data), key=lambda e: e.path)
@@ -501,14 +626,25 @@ for error in errors:
     print("----")
 ```
 
+输出
+
+```
+错误路径: deque([])
+错误信息: 'name' is a required property
+----
+错误路径: deque(['age'])
+错误信息: '30' is not of type 'integer'
+----
+```
 
 
 
 
-## 3.3 样例
+
+# 4. 样例
 
 ```python
-from jsonschema import Draft7Validator, ValidationError
+from jsonschema import Draft7Validator
 
 def validate_json(data, schema):
     validator = Draft7Validator(schema)
@@ -551,6 +687,4 @@ if not is_valid:
     for error in errors:
         print(f"{error['field']}: {error['message']}")
 ```
-
-
 
