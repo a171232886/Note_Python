@@ -1,18 +1,27 @@
-# 1. 测试框架
+# 1. pytest介绍
 
-测试框架：抽象出来的工具集合，提供大量组件、工具、功能
+1. 测试框架：抽象出来的工具集合，提供大量组件、工具、功能
 
-- 用例发现
-- 用例管理
-- 环境管理
-- 用例执行
-- 测试报告
+   - 用例发现
+
+   - 用例管理
+
+   - 环境管理
+
+   - 用例执行
+
+   - 测试报告
 
 
 
-`pytest` 完全兼容 `unittest`
 
-`pytest`对 assert 进行高级封装 （AST），这对python数据结构很友好 
+2. `pytest` **完全兼容** `unittest`
+   - `pytest`对 assert 进行高级封装 （AST），这对python数据结构很友好 
+
+
+
+3. pytest官方
+   - https://docs.pytest.org/en/stable/
 
 
 
@@ -26,23 +35,34 @@
 
    
 
-2. 执行
+2. 脚本编写
+
+   ```python
+   def test_number():
+       assert 1 == 2
+   ```
+   
+   
+   
+2. 两种执行方式
 
    - 终端执行
 
      ```
      pytest
+     # pytest -vs
      ```
-
+   
    - 代码执行
-
+   
      ```python
      # main.py
      import pytest
-     
+     # 代码内容
      pytest.main()
+     # pytest.main(["-v", "-s"])
      ```
-
+     
      
 
 # 3. 看懂结果
@@ -146,7 +166,7 @@ FAILED test_demo.py::test_dict - AssertionError: assert {'a': 1, 'b': 2} == {'a'
 
 
 
-## 3.2 构成
+## 3.2 结果构成
 
 1. 执行环境：版本、根目录、用例数量
 
@@ -226,8 +246,10 @@ FAILED test_demo.py::test_dict - AssertionError: assert {'a': 1, 'b': 2} == {'a'
    - 遍历所有的以`Test`开头的类
      - 搜集所有的以`test_`开头的函数或方法
 
-3. 按目前发现规则：
+   
 
+   注意：按目前发现规则：
+   
    ```python
    def test_func():
        pass
@@ -236,12 +258,10 @@ FAILED test_demo.py::test_dict - AssertionError: assert {'a': 1, 'b': 2} == {'a'
    ```
 
    pytest 会将 `a` 也看做测试用例
-
+   
    
 
 ## 4.2 用例内容规则
-
-> pytest 8.4 增加了一个强制要求
 
 pytest对用例的要求：
 
@@ -274,23 +294,36 @@ class TestAdd:
 
 ## 5.1 命令参数
 
-1. 比如`pytest -v`
+比如`pytest -v`
 
-2. 常用参数
+常用参数
 
-   - `-v`：显示更多信息
+1. `-v`：显示更多信息
 
-   - `-s`：停止IO捕获，在用例中正常使用输入输出。
+2. `-s`：停止IO捕获，在用例中正常使用输入输出。
 
-     比如，当测试用例中出现`a = input()`时，需要使用。
+   比如，当测试用例中出现`a = input()`时，需要使用
 
-     但在自动化测试中，不应该出现输入输出
+   - 但在自动化测试中，不应该出现输入输出
 
-   - `-x`：快速退出。出现一个失败用例，立刻停止全部测试
+3. `-x`：快速退出。出现一个失败用例，立刻停止全部测试
 
-   - `-m`：用例筛选
+4. `-m`：用例筛选
+
+   
 
 ## 5.2 配置文件
+
+在`pytest.ini`中的进行配置
+
+- `addopts`用于添加启动项参数
+
+```ini
+# pytest.ini
+
+[pytest]
+addopts = -v -s
+```
 
 
 
@@ -300,27 +333,29 @@ class TestAdd:
 
 对用例进行标记，进而进行不同处理
 
-一个用例可以添加多个标记
+- 一个用例可以添加多个标记
+
+
 
 ## 6.1 用户自定义标记
 
-**只能实现用例筛选**
+1. 效果：**只能实现用例筛选**
 
-步骤
+2. 步骤
 
-- 注册
-- 标记
-- 筛选
+   - 注册
+
+   - 标记
+
+   - 筛选
 
 
-
-1. 注册
+2. 注册
 
    编写配置文件
 
    ```ini
    # pytest.ini
-   
    [pytest]
    
    markers = 
@@ -331,7 +366,9 @@ class TestAdd:
        ddt: 数据驱动测试
    ```
    
-   验证
+   
+   
+3. 查看已注册的mark
    
    ```bash
    pytest --markers
@@ -350,25 +387,24 @@ class TestAdd:
    
    ...
    ```
-
-
-
-2. 标记
+   
+   
+   
+4. 标记
 
    ```python
    @pytest.mark.api
    def test_api():
    	pass
    ```
-
-
-
-
-3. 筛选
+   
+   
+   
+5. 筛选
 
    只执行标记为`api`的测试用例
 
-   ```
+   ```bash
    pytest -m api
    ```
 
@@ -376,21 +412,24 @@ class TestAdd:
 
 ## 6.2 框架内置标记
 
-用例增加特殊执行效果
+1. 效果：用例增加特殊执行效果
+
+2. 常用的的内置标记
+
+   - `skip`：无条件跳过
+
+   - `skipif`：有条件跳过
+
+   - `xfail`：预期失败
+
+   - `parametrize`：参数化
+
+   - `usefixtures`：使用fixtures
 
 
 
-常用的的内置标记
 
-- `skip`：无条件跳过
-- `skipif`：有条件跳过
-- `xfail`：预期失败
-- `parametrize`：参数化
-- `usefixtures`：使用fixtures
-
-
-
-1. 样例一
+3. 样例
 
    ```python
    import pytest
@@ -412,54 +451,255 @@ class TestAdd:
            assert res == "14"
    ```
 
+
+
+### 6.2.1 parametrize简单使用
+
+1. 使用参数化标记
+
+   - 用于对多组数据执行相同的测试逻辑（共用同一套测试代码）
+   - 每组数据都会生成一个测试报告
+
    
 
-2. 参数化与数据驱动测试
+2. 传入的两个参数
 
-   - 数据驱动测试 = 参数化测试 + 数据文件
-
-   - 根据数据文件的内容，动态决定用例的数量和内容
-
-
-
-# 7. 数据驱动测试参数
-
-1. 数据文件，驱动用例执行数量和内容
-
-2. 样例代码
+   - argnames：字符串形式的参数名
+   - argvalues：参数具体的值，每列要和参数名对的上
 
    ```python
-       @pytest.mark.parametrize("a, b, expected", [
-           (1, 2, 3),
-           (4, 5, 9),
-           (10, 20, 30)
-       ])
-       def test_ddt(self, a, b, expected):
-           assert add(a, b) == expected
-           
+   @pytest.mark.parametrize("arg1, arg2", [
+       (1, 2),
+       (2, 3),
+       # 更多参数组...
+   ])
    ```
 
-   **通常从数据文件中读取数据，而不是直接将数据写好**
+
+
+3. 参数的使用
+
+   - 作为参数传入测试函数
+
+   ```python
+   @pytest.mark.parametrize("arg1, arg2", [
+       (1, 2),
+       (2, 3),
+   ])
+   def test_add(arg1, arg2):
+       assert arg1 + 1 == arg2
+   ```
+
+   执行可以看到
+
+   ```bash
+   ==================================== test session starts ====================================
+   platform linux -- Python 3.11.5, pytest-8.4.1, pluggy-1.6.0 -- /root/miniconda3/bin/python
+   cachedir: .pytest_cache
+   rootdir: /mnt/lr_pytest
+   configfile: pytest.ini
+   plugins: anyio-4.2.0
+   collecting ... ==================================== test session starts ====================================
+   platform linux -- Python 3.11.5, pytest-8.4.1, pluggy-1.6.0 -- /root/miniconda3/bin/python
+   cachedir: .pytest_cache
+   rootdir: /mnt/lr_pytest
+   configfile: pytest.ini
+   plugins: anyio-4.2.0
+   collected 2 items                                                                                                                               
+   
+   test_main.py::test_add[1-2] PASSED
+   test_main.py::test_add[2-3] PASSED
+   
+   ===================================== 2 passed in 0.01s =====================================
+   collected 2 items                                                                                                                               
+   
+   test_main.py::test_add[1-2] PASSED
+   test_main.py::test_add[2-3] PASSED
+   
+   ===================================== 2 passed in 0.08s =====================================
+   ```
 
    
 
-   比如，使用手动编写的`read_csv()`函数产生全部数据
+### 6.2.2 fixture简单使用
 
+1. 可以将 fixture 理解成 FastAPI 中的 `lifespan`
+
+   - 或者粗略理解成python普通意义上的装饰器
+
+   用于测试用例执行前后的逻辑统一实现
+
+2. fixture的声明与使用
+
+   ```python
+   # 注册fixture
+   @pytest.fixture
+   def fun():
+       # 执行前
+       print("Starting test function")
+       
+       yield
+       
+       # 执行后
+       print("\nEnding test function")
+   
+   # fixture作为参数，被测试用例使用
+   def test_function(fun):
+       assert True
    ```
-   @pytest.mark.parametrize("a, b, expected", read_csv())
+
+   输出
+
+   ```bash
+   ==================================== test session starts ====================================
+   platform linux -- Python 3.11.5, pytest-8.4.1, pluggy-1.6.0 -- /root/miniconda3/bin/python
+   cachedir: .pytest_cache
+   rootdir: /mnt/lr_pytest
+   configfile: pytest.ini
+   plugins: anyio-4.2.0
+   collecting ... ==================================== test session starts ====================================
+   platform linux -- Python 3.11.5, pytest-8.4.1, pluggy-1.6.0 -- /root/miniconda3/bin/python
+   cachedir: .pytest_cache
+   rootdir: /mnt/lr_pytest
+   configfile: pytest.ini
+   plugins: anyio-4.2.0
+   collected 1 item                                                                                                                                
+   
+   test_main.py::test_function Starting test function
+   PASSED
+   Ending test function
+   
+   
+   ==================================== 1 passed in 0.01s ====================================
+   collected 1 item                                                                                                                                
+   
+   test_main.py::test_function Starting test function
+   PASSED
+   Ending test function
+   
+   
+   ==================================== 1 passed in 0.07s ====================================
    ```
 
    
+
+
+# 7. 数据驱动测试
+
+1. 数据驱动测试
+
+   - 数据驱动测试 = 参数化测试 + 数据文件
+   
+   
+      - 根据数据文件的内容，动态决定用例的数量和内容
+      - 通常使用parametrize来配合实现
+   
+2. 数据驱动测试有助于用例编写人员不必熟悉测试程序，**只需构建输入和输出即可**
+
+3. 构成
+
+   - 数据
+
+   - 数据载入程序
+
+   - 测试函数
+
+
+
+## 7.1 数据
+
+数据格式没有硬性要求，但通常会选择更接近于表格的`csv`
+
+此处使用`json`
+
+```json
+[
+    {"arg1": 1, "arg2": 2, "res": 3},
+    {"arg1": 4, "arg2": 5, "res": 9},
+    {"arg1": 6, "arg2": 7, "res": 13},
+    {"arg1": 8, "arg2": 9, "res": 17},
+    {"arg1": 10, "arg2": 11, "res": 21}
+]
+```
+
+
+
+## 7.2 数据载入
+
+```python
+# utils.py
+import json
+
+def data_load(file_path: str):
+    
+    with open(file_path, 'r', encoding='utf-8') as f:
+        dataset = json.load(f)
+
+    test_data = [tuple(data.values()) for data in dataset]
+    return test_data
+```
+
+
+
+## 7.3 测试函数
+
+```python
+@pytest.mark.parametrize("arg1, arg2, res", dataloader("data.json"))
+def test_add(arg1, arg2, res):
+    assert arg1 + arg2 == res
+```
+
+输出
+
+```
+==================================== test session starts ====================================
+platform linux -- Python 3.11.5, pytest-8.4.1, pluggy-1.6.0 -- /root/miniconda3/bin/python
+cachedir: .pytest_cache
+rootdir: /mnt/lr_pytest
+configfile: pytest.ini
+plugins: anyio-4.2.0
+collecting ... ==================================== test session starts ====================================
+platform linux -- Python 3.11.5, pytest-8.4.1, pluggy-1.6.0 -- /root/miniconda3/bin/python
+cachedir: .pytest_cache
+rootdir: /mnt/lr_pytest
+configfile: pytest.ini
+plugins: anyio-4.2.0
+collected 5 items                                                                                                                               
+
+test_main.py::test_add[1-2-3] PASSED
+test_main.py::test_add[4-5-9] PASSED
+test_main.py::test_add[6-7-13] PASSED
+test_main.py::test_add[8-9-17] PASSED
+test_main.py::test_add[10-11-21] PASSED
+
+==================================== 5 passed in 0.02s ====================================
+collected 5 items                                                                                                                               
+
+test_main.py::test_add[1-2-3] PASSED
+test_main.py::test_add[4-5-9] PASSED
+test_main.py::test_add[6-7-13] PASSED
+test_main.py::test_add[8-9-17] PASSED
+test_main.py::test_add[10-11-21] PASSED
+
+==================================== 5 passed in 0.10s ====================================
+```
+
+
+
+
 
 # 8. 夹具fixture
 
-夹具：在用例**执行之前、执行之后**，自动运行代码
+1. 夹具：在用例**执行之前、执行之后**，自动运行代码
 
-场景：
+2. 场景：
 
-- 之前：加密参数，之后：解密结果
-- 之前：启动浏览器，之后：关闭浏览器
-- 之前：注册、登录账号，之后：删除账号  
+   - 之前：加密参数，之后：解密结果
+
+   - 之前：启动浏览器，之后：关闭浏览器
+
+   - 之前：注册、登录账号，之后：删除账号  
+
 
 
 
@@ -503,7 +743,7 @@ def f():
 
 
 
-## 8.3 高级方法
+## 8.3 自动使用和范围共享
 
 1. 自动使用：所有用例自动使用
 
@@ -515,7 +755,71 @@ def f():
 
    
 
-2. 依赖使用
+2. 范围共享
+
+   适用于昂贵的初始化（如数据库连接、浏览器启动）
+
+   - 默认范围：`function`，本函数内
+
+   - 全局范围：`session`
+
+     - 在根目录下，创建`conftest.py`，需要共享的`fixture`放此处。
+     - `pytest`会自动发现`conftest.py`，保证全局用例都能获取到。
+
+   
+
+3. `conftest.py`样例，正常编写即可
+
+   ```python
+   # conftest.py
+   @pytest.fixture(autouse=True, scope="session")
+   def f():
+       # 前置操作
+       print(time.time(), "开始执行")
+       
+       yield "fixture_result"  # 执行用例
+       
+       # 后置操作
+       print(time.time(), "执行结束")
+       
+   ```
+   
+   
+   
+4. 使用效果
+
+
+   ```python
+   # test_1.py
+   def test_1(f):
+       print("收到fixture的结果", f)
+   ```
+
+   ```python
+   # test_2.py 
+   def test_2(f):
+       print("收到fixture的结果", f)
+   ```
+
+   
+
+   输出
+
+   ```bash
+   test_fixture.py::test_1 1749631063.1157985 开始执行
+   收到fixture的结果 fixture_result
+   PASSED
+   test_fixture.py::test_2 收到fixture的结果 fixture_result
+   PASSED1749631063.1164677 执行结束
+   ```
+
+   可以看到，`开始执行`只输出了一次
+
+
+
+## 8.4 高级方法
+
+1. 依赖使用
 
    `f`在执行前先执行`ff`
 
@@ -531,7 +835,7 @@ def f():
 
    
 
-3. 返回内容
+2. 返回内容
 
    ```python
    @pytest.fixture
@@ -539,72 +843,19 @@ def f():
        # 前置操作
        print(time.time(), "开始执行")
        
-       yield "fixture_result"  # 执行用例
+       yield 1, 2, 3  # 执行用例
        
        # 后置操作
        print(time.time(), "执行结束")
        
    
    def test(f):
-       print("收到fixture的结果", f)
+       a, b, c = f  # 解包元组
    ```
 
    
 
-4. 范围共享
-
-   适用于昂贵的初始化（如数据库连接、浏览器启动）
-
-   - 默认范围：`function`，本函数内
-
-   - 全局范围：`session`
-
-     - 在根目录下，创建`conftest.py`，需要共享的`fixture`放此处。
-     
-     - `pytest`会自动发现`conftest.py`，保证全局用例都能获取到。
-     
-       
    
-   ```python
-   # conftest.py
-   @pytest.fixture(autouse=True, scope="session")
-   def f():
-       # 前置操作
-       print(time.time(), "开始执行")
-       
-       yield "fixture_result"  # 执行用例
-       
-       # 后置操作
-       print(time.time(), "执行结束")
-       
-   ```
-   
-   ```python
-   # test_1.py
-   def test_1(f):
-       print("收到fixture的结果", f)
-   ```
-   
-   ```python
-   # test_2.py 
-   def test_2(f):
-       print("收到fixture的结果", f)
-   ```
-   
-   
-   
-   输出
-   
-   ```bash
-   test_fixture.py::test_1 1749631063.1157985 开始执行
-   收到fixture的结果 fixture_result
-   PASSED
-   test_fixture.py::test_2 收到fixture的结果 fixture_result
-   PASSED1749631063.1164677 执行结束
-   ```
-   
-   可以看到，`开始执行`只输出了一次
-
 
 
 # 9. 插件管理
@@ -625,7 +876,7 @@ def f():
 
 
 
-# 10. 常用第三方插件
+## 9.1 常用第三方插件
 
 1. pytest收录的插件
 
@@ -633,7 +884,7 @@ def f():
 
 
 
-## 10.1 pytest-html
+### 9.1.1 pytest-html
 
 1. 用途：生成HTML报告
 
@@ -657,7 +908,7 @@ def f():
 
 
 
-## 10.2 pytest-xdist
+### 9.1.2 pytest-xdist
 
 1. 用途：分布式执行。**默认使用多进程实现**
 
@@ -684,7 +935,7 @@ def f():
 
 
 
-## 10.3 pytest-rerunfailures
+### 9.1.3 pytest-rerunfailures
 
 1. 用途：用例失败后，重新执行
 
@@ -707,9 +958,11 @@ def f():
 
    
 
-## 10.4 pytest-result-log
+### 9.1.4 pytest-result-log
 
 1. 用途：把用例的执行结果记录到日志文件中
+
+   - 不需要在测试函数中做特殊处理
 
 2. 安装：
 
@@ -741,24 +994,33 @@ def f():
 
 
 
-# 11. 企业级测试报告
+## 9.2 企业级测试报告allure
 
-## 11.1 基础使用
+`allure`是一个测试报告框架，支持多种语言
 
-1. `allure`是一个测试报告框架，支持多种语言。
+- **allure网页效果很友好**
+- allure为pytest用户开发了一个pytest适配版
 
-   **allure网页效果很友好**
+
+
+### 9.2.1 基础使用
+
+1. 先安装allure
 
    - https://allurereport.org/docs/install-for-linux/#install-from-a-deb-package
    - https://github.com/allure-framework/allure2/releases/tag/2.34.0
 
    下载对应`deb`包，然后`sudo dpkg -i <allure包>.deb`
 
+   
+
 2. 安装对应pytest插件
 
    ```
    pip install allure-pytest
    ```
+
+   
 
 3. 配置
 
@@ -768,6 +1030,8 @@ def f():
 
    - 执行pytest时，只是将数据保存到`temps`，并没有生成报告
    - 新生成的数据覆盖已有的报告
+
+   
 
 4. 生成报告
 
@@ -779,7 +1043,7 @@ def f():
 
 
 
-## 11.2 分组和关联
+### 9.2.2 分组和关联
 
 1. allure 支持对用例进行分组和关联（敏捷开发术语）
 
@@ -793,7 +1057,10 @@ def f():
    ```
 
    - 使用相同装饰器，自动分为一组
+
    - 一个用例可以在很多组
+
+     
 
 2. 脚本
 
@@ -849,58 +1116,37 @@ def f():
 
 
 
-# 12. Web自动化测试实战
-
-1. 安装 `selenium` 插件
-
-   ```
-   pip install pytest-selenium
-   ```
-
-2. 使用
-
-   ```
-   --driver chrome
-   ```
-
-   ```python
-   import pytest
-   
-   @pytest.mark.web
-   def test_web_1(selenium):
-       selenium.get("https://www.baidu.com")
-       print("Web test 1 executed")
-       print(selenium.title)
-   ```
-
-   
 
 
+# 10. 框架封装与接口测试
 
-# 13. 测试框架封装
+## 10.1 测试框架封装
 
-封装：
+1. 封装：
 
-- 隐藏细节
-- 增加功能
-- 优化功能
+   - 隐藏细节
 
+   - 增加功能
 
-
-接口自动化封装：
-
-- 使用yaml作为用例，降低自动化门槛
-- 自动请求接口、断言接口
-- 自动在日志记录HTTP报文
-- 自动生成`allure`测试报告
+   - 优化功能
 
 
 
 
+2. 接口自动化封装：
 
-# 15. 接口测试用例
+   - 使用yaml作为用例，降低自动化门槛
 
-## 15.1 设计用例内容
+   - 自动请求接口、断言接口
+
+   - 自动在日志记录HTTP报文
+
+   - 自动生成`allure`测试报告
+
+
+
+
+## 11.2 接口测试用例内容
 
 1. 名字
 2. 标记（可选）
@@ -911,7 +1157,7 @@ def f():
 
 
 
-## 15.2 YAML的样例
+4. yaml样例
 
 ```yaml
 name: 登录成功用例
@@ -943,9 +1189,9 @@ steps:
 
 
 
-# 16. 封装接口自动化框架
+# 12. 封装接口自动化框架
 
-## 16.1 请求接口
+## 12.1 请求接口
 
 1. 使用`requests`库发送网络连接
 
@@ -964,7 +1210,7 @@ steps:
 
 
 
-## 16.2 断言响应
+## 12.2 断言响应
 
 1. 使用python的 assert
 
@@ -983,9 +1229,7 @@ steps:
 
 
 
-## 16.3 jsonschema
-
-### 16.3.1 基础
+## 12.3 jsonschema
 
 openapi规范中遵循的接口描述方式就是jsonschema
 
@@ -998,227 +1242,13 @@ JSON Schema的官网：
 
 
 
-1. 基础用法
-
-   ```python
-   from jsonschema import validate
-   
-   # 定义schema
-   schema = {
-       "type": "object",
-       "properties": {
-           "name": {"type": "string"},
-           "age": {"type": "number"}
-       },
-       "required": ["name"]
-   }
-   
-   # 有效数据
-   valid_data = {"name": "John", "age": 30}
-   validate(instance=valid_data, schema=schema)  # 不会抛出异常
-   
-   # 无效数据
-   invalid_data = {"age": 30}
-   try:
-       validate(instance=invalid_data, schema=schema)
-   except Exception as e:
-       print(f"验证失败: {e}")
-   ```
-
-   
-
-
-
-2. 升级
-
-   ```python
-   {
-     "type": "object",
-     "properties": {
-       "username": {
-         "type": "string",
-         "minLength": 4,
-         "maxLength": 20,
-         "pattern": "^[a-z0-9_]+$"  #正则：只允许小写字母、数字和下划线
-       },
-       "role": {
-         "type": "string",
-         "enum": ["admin", "user", "guest"]  # 枚举值
-       },
-       "age": {
-         "type": "integer",
-         "minimum": 18,
-         "maximum": 99
-       },
-       "email": {
-         "type": "string",
-         "format": "email",
-         "pattern": ".+@.+\\..+"  # 简单邮箱正则
-       },
-       "contact": {				# 结构嵌套
-         "type": "object",
-         "properties": {
-           "email": {
-             "type": "string",
-             "format": "email"
-           },
-           "phone": {
-             "type": "string",
-             "pattern": "^\\+?[0-9]{10,15}$"
-           }
-         },
-         "required": ["email"]
-       }
-     },
-     "required": ["username", "email"]
-   }
-   ```
-
-   
-
-3. 引用和复用
-
-   ```python
-   schema = {
-       "definitions": {
-           "address": {
-               "type": "object",
-               "properties": {
-                   "street": {"type": "string"},
-                   "city": {"type": "string"}
-               },
-               "required": ["street", "city"]
-           }
-       },
-       "type": "object",
-       "properties": {
-           "home_address": {"$ref": "#/definitions/address"},
-           "work_address": {"$ref": "#/definitions/address"}
-       }
-   }
-   ```
-
-
-
-
-### 16.3.2 错误分析
-
-1. 基本错误捕获
-
-最简单的错误处理方式是捕获 `ValidationError` 异常：
-
-```python
-from jsonschema import validate, ValidationError
-
-schema = {
-    "type": "object",
-    "properties": {
-        "name": {"type": "string"},
-        "age": {"type": "integer"}
-    },
-    "required": ["name"]
-}
-
-data = {"age": "30"}  # 错误：age应该是整数，且缺少name
-
-try:
-    validate(instance=data, schema=schema)
-except ValidationError as e:
-    print(f"验证失败: {e.message}")
-    print(f"错误路径: {e.json_path}")  # 错误在数据中的位置
-    print(f"错误值: {e.instance}")    # 引发错误的值
-    print(f"期望的规则: {e.schema}")  # schema中的验证规则
-```
-
-
-
-2. 获取多个错误
-
-默认情况下，`validate()` 在遇到第一个错误时就停止。要收集所有错误，使用验证器实例：
-
-```python
-from jsonschema import Draft7Validator
-
-validator = Draft7Validator(schema)
-errors = sorted(validator.iter_errors(data), key=lambda e: e.path)
-
-for error in errors:
-    print(f"错误路径: {error.path}")
-    print(f"错误信息: {error.message}")
-    print("----")
-```
-
-
-
-3. 错误对象属性
-
-`ValidationError` 对象包含以下有用属性：
-
-| 属性          | 描述                               |
-| :------------ | :--------------------------------- |
-| `message`     | 人类可读的错误信息                 |
-| `path`        | 错误在数据结构中的路径（列表形式） |
-| `json_path`   | 错误路径的JSON Path表示            |
-| `schema_path` | 错误在schema中的路径               |
-| `instance`    | 引发错误的实际值                   |
-| `schema`      | 相关的schema规则                   |
-| `context`     | 对于复合验证器，包含子错误         |
-| `cause`       | 底层异常（如果有）                 |
-
-
-
-```python
-from jsonschema import Draft7Validator, ValidationError
-
-def validate_json(data, schema):
-    validator = Draft7Validator(schema)
-    errors = list(validator.iter_errors(data))
-    
-    if not errors:
-        return True, None
-    
-    error_details = []
-    for error in errors:
-        error_details.append({
-            "field": ".".join(map(str, error.path)) or "root",
-            "message": error.message,
-            "value": error.instance,
-            "expected": error.schema.get("type") if "type" in error.schema else None
-        })
-    
-    return False, error_details
-
-# 使用示例
-schema = {
-    "type": "object",
-    "properties": {
-        "name": {"type": "string", "minLength": 3},
-        "age": {"type": "integer", "minimum": 18},
-        "email": {"type": "string", "format": "email"}
-    },
-    "required": ["name", "email"]
-}
-
-data = {
-    "name": "Al",
-    "age": 17,
-    "email": "invalid-email"
-}
-
-is_valid, errors = validate_json(data, schema)
-if not is_valid:
-    print("验证失败:")
-    for error in errors:
-        print(f"{error['field']}: {error['message']}")
-```
 
 
 
 
 
 
-
-## 16.4 变量提取
+## 12.4 变量提取
 
 基本原则：
 
@@ -1235,7 +1265,9 @@ if not is_valid:
 - 字符串：re
   - 可用来兜底
 
-### 16.4.1 jsonpath的使用
+
+
+ jsonpath的使用
 
 1. 基础
 
@@ -1289,7 +1321,7 @@ if not is_valid:
 
 
 
-## 16.5 封装
+## 12.5 封装
 
 ```yaml
 name: 登录成功用例
