@@ -1,14 +1,16 @@
-# 14. YAML文件格式
+# YAML文件格式
 
-1. YAML: YAML Ain't Markup Language 
+YAML: YAML Ain't Markup Language 
 
-   - **YAML完全兼容JSON格式，并且支持Python相似写法**
-   - 广泛应用于 Kubernetes、Ansible、Docker Compose 等工具的配置文件中
-   - YAML文件在python中被读取为dict
+- **YAML完全兼容JSON格式，并且支持Python相似写法**
+- 广泛应用于 Kubernetes、Ansible、Docker Compose 等工具的配置文件中
+- YAML文件在python中被读取为dict
 
-   
 
-2. 安装
+
+# 1. 快速上手
+
+1. 安装
 
    ```
    pip install pyyaml
@@ -35,166 +37,171 @@
 
    
 
-## 14.1 格式
+# 2. 书写格式
 
-1. 要点
+## 2.1 基础
 
-   - `#` ：注释
-   - `null` ：表示空值
-   - 成员：通过缩进表示
+- `#` ：注释
+- `null` ：表示空值
+- 成员：通过缩进表示
 
-   ```yaml
-   # config.yaml
-   name: 登录成功用例
-   steps:
-     request: # 发送请求
-       method: POST
-       url: http://example.com/api/login
-       headers:
-       Content-Type: application/json
-       body:
-       username: testuser
-       password: testpassword
-     
-     response: 
-       status_code: 200
-   
-     extract: null
-   ```
+```yaml
+# config.yaml
+name: 登录成功用例
+steps:
+  request: # 发送请求
+    method: POST
+    url: http://example.com/api/login
+    headers:
+    Content-Type: application/json
+    body:
+    username: testuser
+    password: testpassword
+  
+  response: 
+    status_code: 200
 
-   python读入后
+  extract: null
+```
 
-   ```python
-   {
-     "name": "登录成功用例",
-     "steps": {
-       "request": {
-         "method": "POST",
-         "url": "http://example.com/api/login",
-         "headers": {
-           "Content-Type": "application/json"
-         },
-         "body": {
-           "username": "testuser",
-           "password": "testpassword"
-         }
-       },
-       "response": {
-         "status_code": 200
-       },
-       "extract": None
-     }
-   }
-   ```
+python读入后
 
-   
-
-2. 数组或列表的两种表示方法：
-
-   - 元素前添加`-` （不推荐）
-   - 直接使用列表表示
-
-   
-
-   ```yaml
-   name: 登录成功用例
-   method:
-     - post
-     - get
-   
-   text: ["hello", "world"]
-   
-   input: [
-     "how",
-     "are",
-     "you"
-   ]
-   ```
-
-   python读取后
-
-   ```python
-   {
-     "name": "登录成功用例",
-     "method": [
-       "post",
-       "get"
-     ],
-     "text": [
-       "hello",
-       "world"
-     ],
-     "input": [
-       "how",
-       "are",
-       "you"
-     ]
-   }
-   ```
-
-   
-
-
-3. **注意**：
-
-   - 成员中只要有一项添加了`-`，其上级均被视为数组
-
-     ```yaml
-     name: 登录成功用例
-     method:
-       - get: "ddd"
-         post: "hello"
-     ```
-
-     python 中读取
-
-     ```python
-     {
-       "name": "登录成功用例",
-       "method": [
-         {
-           "get": "ddd",
-           "post": "hello"
-         }
-       ]
-     }
-     ```
-
-   - 同一缩进下，要么全加`-`，要么都不加
-
-     ```yaml
-     # 错误写法
-     name: 登录成功用例
-     method:
-       - get: "ddd"
-       post: "hello"
-     ```
-
-   **因此，不推荐使用`-`**
-
-   
-
-4. **完全按照json写**
-
-   ```yaml
-   # config.yaml
-   {
-     "name": "登录成功用例",
-     "method": {
-         "get": "ddd",
-         "post": "hello"
-     }
-   }
-     
-   ```
-
-   可正常载入
+```python
+{
+  "name": "登录成功用例",
+  "steps": {
+    "request": {
+      "method": "POST",
+      "url": "http://example.com/api/login",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "username": "testuser",
+        "password": "testpassword"
+      }
+    },
+    "response": {
+      "status_code": 200
+    },
+    "extract": None
+  }
+}
+```
 
 
 
-## 14.2 pyyaml基础用法
+## 2.2 数组
 
-### 14.2.1 读取
+### 2.2.1 两种表示
+
+数组或列表的两种表示方法：
+
+- 元素前添加`-` （不推荐）
+- 直接使用列表表示
+
+
+
+```yaml
+name: 登录成功用例
+method:
+  - post
+  - get
+
+text: ["hello", "world"]
+
+input: [
+  "how",
+  "are",
+  "you"
+]
+```
+
+python读取后
+
+```python
+{
+  "name": "登录成功用例",
+  "method": [
+    "post",
+    "get"
+  ],
+  "text": [
+    "hello",
+    "world"
+  ],
+  "input": [
+    "how",
+    "are",
+    "you"
+  ]
+}
+```
+
+
+
+### 2.2.2 注意
+
+- 成员中只要有一项添加了`-`，其上级均被视为数组
+
+  ```yaml
+  name: 登录成功用例
+  method:
+    - get: "ddd"
+      post: "hello"
+  ```
+
+  python 中读取
+
+  ```python
+  {
+    "name": "登录成功用例",
+    "method": [
+      {
+        "get": "ddd",
+        "post": "hello"
+      }
+    ]
+  }
+  ```
+
+- 同一缩进下，要么全加`-`，要么都不加
+
+  ```yaml
+  # 错误写法
+  name: 登录成功用例
+  method:
+    - get: "ddd"
+    post: "hello"
+  ```
+
+**因此，不推荐使用`-`**
+
+
+
+## 2.3 JSON方式
+
+**完全按照json写**
+
+```yaml
+# config.yaml
+{
+  "name": "登录成功用例",
+  "method": {
+      "get": "ddd",
+      "post": "hello"
+  }
+}
+  
+```
+
+可正常载入
+
+
+
+# 3. pyyaml基础用法
+
+## 3.1 读取
 
 1. 从文件中加载
 
@@ -230,7 +237,7 @@
 
 
 
-### 14.2.2 写入
+## 3.2 写入
 
 1. 转换成yaml字符串
 
@@ -263,4 +270,3 @@
    起到的效果类似于 `json.dump(data, file, indent=2, ensure_ascii=False)`
 
    注意：`allow_unicode=True` 相当于json的`ensure_ascii=False`
-
