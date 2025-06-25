@@ -1118,22 +1118,12 @@ def f():
 
 
 
-# 10. 框架封装与接口测试
+# 10. 封装接口自动化测试框架
 
-## 10.1 测试框架封装
-
-1. 封装：
-
-   - 隐藏细节
-
-   - 增加功能
-
-   - 优化功能
+## 10.1 框架封装
 
 
-
-
-2. 接口自动化封装：
+1. 接口自动化封装：
 
    - 使用yaml作为用例，降低自动化门槛
 
@@ -1145,135 +1135,337 @@ def f():
 
 
 
+2. 接口测试用例内容
 
-## 11.2 接口测试用例内容
-
-1. 名字
-2. 标记（可选）
-3. 步骤
    - 请求接口：GET https://www.baidu.com
+
    - 响应断言：status_code == 200
+
    - 提取变量：json()['code']
 
 
 
-4. yaml样例
+3. yaml样例
 
-```yaml
-name: 登录成功用例
-steps:
-  - request: # 发送请求
-      method: POST
-      url: http://example.com/api/login
-      headers:
-        Content-Type: application/json
-      body:
-        username: testuser
-        password: testpassword
-  
-  - response: # 响应验证
-      status_code: 200
-      body:
-        message: 登录成功
-        token: 
-          type: string
-          description: 用户登录后返回的令牌
-      headers:
-        Content-Type: application/json
-    
-  - extract: # 提取令牌
-      token: $.body.token
+   内容格式和项目高度绑定，没有统一的标准
+
+   ```yaml
+   name: 登录成功用例
+   description: 测试用户登录功能，验证登录成功后返回的令牌
+   tag: ["标签用于用例分类"]
+   
+   steps:
+     send: # 发送请求
+       method: POST
+       url: http://127.0.0.1:8000/login
+       headers:
+         Content-Type: application/json
+       body:
+         username: admin
+         password: password
+     
+     validate: # 响应验证
+       body:
+         status_code: 200
+         message: Login successful
+       
+     extract: # 提取令牌
+       token: $.body.token
+   ```
+
+   
+
+## 10.2 框架目录
+
+详见[codes/pytest_example](codes/pytest_example)
+
+```bash
+.
+├── cache					# allure生成的缓存
+│   └── xxx.txt
+├── data
+│   ├── data.csv
+│   └── test_api.yaml
+├── logs					
+│   ├── __init__.py
+│   └── xxx.log
+├── report					# allure生成的网页
+│   └── xxx
+│   └── index.html
+├── tests
+│   ├── test_xxx.py
+│   └── test_demo.py
+├── utils
+│   ├── __init__.py
+│   └── xxx.py
+├── .gitignore
+├── pytest.ini
+├── requirements.txt
+├── conftest.py    
+└── main.py					# 测试入口
 ```
 
 
 
+1. `.gitignore`
 
-
-# 12. 封装接口自动化框架
-
-## 12.1 请求接口
-
-1. 使用`requests`库发送网络连接
-
-   ```python
-   import requests
+   ```
+   cache
+   report
+   .log
    
-   response = requests.request(
-       method='GET', 
-       url='https://example.com', 
-       params={'key': 'value'}, 
-       headers={'User-Agent': 'my-app'}
-   )
+   ...
    ```
 
    
 
+2. `pytest.ini`
 
-
-## 12.2 断言响应
-
-1. 使用python的 assert
-
-   ```python
-   assert response.status_code == 200
-   assert response.json()["data"] == "hello world"
+   ```ini
+   [pytest]
+   
+   addopts = -v -s --alluredir=cache --clean-alluredir
+   markers = 
+       unit: 单元测试
+       api: 接口测试
+       ddt: 数据驱动测试
+   
+   
+   log_file = logs/test.log
+   log_file_level = INFO
+   log_file_format = %(asctime)s - %(name)s - %(levelname)s - %(message)s
+   log_file_date_format = %Y-%m-%d %H:%M:%S
+   
+   ; 是否启用结果日志
+   result_log_enable = 1
+   ; 结果日志分隔线                
+   result_log_separator = 1
+   ; 分割线等级
+   result_log_level_separator = warning
+   ; 结果日志详细等级
+   result_log_level_verbose = info
    ```
 
 
 
-2. 使用`jsonschema`
+3. `requirements.txt`
+
+   ```
+   pytest
+   fastapi
+   uvicorn
+   requests
+   pytest-result-log
+   allure-pytest
+   pyyaml
+   jsonschema
+   jsonpath-ng
+   ```
+
+   
+
+3. `main.py`
+
+   ```python
+   import os
+   import pytest
+   
+   pytest.main()
+   os.system("allure generate -o report -c cache")
+   ```
+
+   
+
+## 10.3 测试程序
+
+### 10.3.1 用例程序
+
+```python
+import pytest
+import allure
+import requests
+from jsonpath_ng.ext import parse
+
+from utils import load_test_case, validate_response
+
+@allure.title("demo")
+@pytest.mark.api
+@pytest.mark.parametrize("send, validate, extract", load_test_case())
+def test_demo(send, validate, extract):
+    """
+    Test case for API requests.
+    
+    :param send: The request data for the API call.
+    :param validate: The validation rules for the response.
+    :param extract: The extraction rules for the response.
+    """
+    
+    # step 1: send the request
+    url = send.get("url")
+    method = send.get("method")
+    headers = send.get("headers", {})
+    body = send.get("body", {})
+
+    response = requests.request(method=method, url=url, headers=headers, json=body)
+
+    # step 2: validate the response
+    val_result = validate_response(response, validate)
+    assert val_result is None
+    
+    # step 3: extract data if needed
+    if extract:
+        for key, expr in extract.items():
+            jsonpath_expr = parse(expr)
+            matches = jsonpath_expr.find(response.json())
+            if matches:
+                extracted_value = matches[0].value
+                allure.attach(name=key, body=str(extracted_value), attachment_type=allure.attachment_type.TEXT)
+            else:
+                allure.attach(name=key, body="No match found", attachment_type=allure.attachment_type.TEXT)
+```
+
+
+
+### 10.3.2 响应验证
+
+
+
+1. 可以考虑使用 jsonschema
 
    ```
    pip install jsonschema
    ```
 
+   
 
-
-## 12.3 jsonschema
-
-openapi规范中遵循的接口描述方式就是jsonschema
-
-- 当前都是基于2020-12版本（最新）
-
-JSON Schema的官网：
-
-- https://json-schema.org/
-- https://json-schema.org/specification
-
-
-
-
-
-
-
-
-
-## 12.4 变量提取
-
-基本原则：
-
-- JSON: JSONPATH
-
-  ```
-  pip install jsonpath-ng
-  ```
-
-  
-
-- HTML: XPATH
-
-- 字符串：re
-  - 可用来兜底
-
-
-
- jsonpath的使用
-
-1. 基础
+2. jsonschema的基础使用
 
    ```python
-   import json
-   from jsonpath_ng import parse
+   from jsonschema import validate
+   
+   # 定义schema
+   schema = {
+       "type": "object",
+       "properties": {
+           "name": {"type": "string"},
+           "age": {"type": "number"}
+       },
+       "required": ["name"]
+   }
+   
+   # 有效数据
+   valid_data = {"name": "John", "age": 30}
+   validate(instance=valid_data, schema=schema)  # 不会抛出异常
+   
+   # 无效数据
+   invalid_data = {"age": 30}
+   try:
+       validate(instance=invalid_data, schema=schema)
+   except Exception as e:
+       print(f"验证失败: {e}")
+   ```
+
+   详细使用方式，可参考 [JSONSchema.md](JSONSchema.md)
+
+
+
+3. `utils/validate.py`
+
+   ```python
+   from jsonschema import Draft7Validator
+   
+   
+   def create_schema(validate):
+       """
+       Create a JSON schema from the validation rules.
+       
+       :param validate: The validation rules for the response.
+       :return: A JSON schema object.
+       """
+       
+       schema = {
+           "type": "object",
+           "properties": {}
+       }
+       
+       bodys = validate.get("body", {})
+       for key, value in bodys.items():
+           if isinstance(value, str):
+               key_type = "string"
+           elif isinstance(value, int):
+               key_type = "integer"
+           elif isinstance(value, bool):
+               key_type = "boolean"
+           # ....
+           
+           schema["properties"][key] = {
+               "type": key_type,
+               "const": value 
+           }
+       
+       return schema
+   
+   
+   def validate_response(response, validate):
+       """
+       Validate JSON data against a given schema.
+       
+       :param json_data: The JSON data to validate.
+       :param schema: The JSON schema to validate against.
+       :return: True if valid, raises ValidationError if invalid.
+       """
+       
+       schema = create_schema(validate)
+       validator = Draft7Validator(schema)
+       errors = list(validator.iter_errors(response.json()))
+       
+       if errors:
+           error_details = []
+           for error in errors:
+               error_details.append(
+                   f"Error: {error.message}, Schema Path: {list(error.schema_path)}, Instance Value: {error.instance}"
+               )
+   
+           return error_details
+       
+       elif response.status_code != 200:
+           return f"Request failed with status code: {response.status_code}"
+       
+       else:
+           return None
+   ```
+
+   
+
+### 10.3.3 参数提取
+
+```bash
+    # step 3: extract data if needed
+    if extract:
+        for key, expr in extract.items():
+            jsonpath_expr = parse(expr)
+            matches = jsonpath_expr.find(response.json())
+            if matches:
+                extracted_value = matches[0].value
+                allure.attach(name=key, body=str(extracted_value), attachment_type=allure.attachment_type.TEXT)
+            else:
+                allure.attach(name=key, body="No match found", attachment_type=allure.attachment_type.TEXT)
+```
+
+
+
+1. 使用了 jsonpath-ng
+
+   ```
+   pip install jsonpath-ng
+   ```
+
+
+
+2. jsonpath-ng 的基础使用
+
+   ```python
+   from jsonpath_ng.ext import parse
    
    # 示例 JSON 数据
    data = {
@@ -1300,58 +1492,35 @@ JSON Schema的官网：
    }
    
    # 解析 JSONPath 表达式
-   jsonpath_expr = parse("$.store.book[*].author")
+   expr = parse("$.store.book[*].price")
    
    # 查找匹配项
-   matches = [match.value for match in jsonpath_expr.find(data)]
-   print(matches)  # 输出: ['Nigel Rees', 'Evelyn Waugh']
+   for match in expr.find(data):
+       print(match.value)
    ```
-   
-   获取全部的价格
-   
-   ```
-   jsonpath_expr = parse("$..price")
-   prices = [match.value for match in jsonpath_expr.find(data)]
-   print(prices)  # [8.95, 12.99, 19.95]
-   ```
-   
-   
+
+   详细使用方式，参考[JSONPath.md](JSONPath.md)
 
 
 
+## 10.4 个人体会
 
+1. 对于简单的项目，没有必要封装接口自动化测试框架
 
-## 12.5 封装
+   - 测试用例文件 (`yaml`)内容格式的确定、对应解析程序的开发，这本身就要大量精力
 
-```yaml
-name: 登录成功用例
-steps:
-  - request: # 发送请求
-      method: POST
-      url: http://example.com/api/login
-      headers:
-        Content-Type: application/json
-      body:
-        username: testuser
-        password: testpassword
-  
-  - response: # 响应验证
-      status_code: 200
-      body:
-        message: 登录成功
-        token: 
-          type: string
-          description: 用户登录后返回的令牌
-      headers:
-        Content-Type: application/json
-    
-  - extract: # 提取令牌
-      token: $.body.token
-```
+2. 对于简单且格式易变的响应，没必要使用 JSON Schema，
+
+   提取其中的参数，也没有必要使用 JSONPath
+
+ 	3. 重点是在于有测试用例，并且能正常承担测试功能
+     - 复杂插件/工具，取决于项目是否有明显需求
+     - 小项目没必要一开始就按照企业级的大项目来开发测试框架
 
 
 
+# 11. 参考
 
+1. https://www.bilibili.com/video/BV1rDdHYCEUP/
 
-
-
+   本笔记在此基础上整理、改进，添加个人见解得到

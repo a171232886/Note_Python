@@ -1,0 +1,21 @@
+name: 登录失败用例
+description: 测试用户登录功能
+tag: ["标签用于用例分类"]
+
+steps:
+  send: # 发送请求
+    method: POST
+    url: http://127.0.0.1:8000/login
+    headers:
+      Content-Type: application/json
+    body:
+      username: testuser
+      password: testpassword
+  
+  validate: # 响应验证
+    body:
+      status_code: 200
+      message: Login successful
+    
+  extract: # 提取令牌
+    token: $.body.token

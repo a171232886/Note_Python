@@ -1,0 +1,9 @@
+pytest
+fastapi
+uvicorn
+requests
+pytest-result-log
+allure-pytest
+pyyaml
+jsonschema
+jsonpath-ng
