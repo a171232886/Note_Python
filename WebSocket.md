@@ -166,6 +166,11 @@ https://python-socketio.readthedocs.io/en/stable/server.html#rooms
 
 ## 2.2 代码案例
 
+环境准备：
+```
+pip install python-socketio eventlet requests
+```
+
 1. 服务端
 
    ```python
