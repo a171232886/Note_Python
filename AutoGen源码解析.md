@@ -1,4 +1,4 @@
-#  源码解析
+# 源码解析
 
 AutoGen 框架源码解析
 
@@ -17,8 +17,9 @@ AutoGen 框架源码解析
    	B-->G(RunTime)
    	
    	H(Message)
+   ```
 
-3. B站视频：https://www.bilibili.com/video/BV16L6ZBfEgG
+
 
 # 1. Model Client
 
@@ -117,20 +118,20 @@ asyncio.run(main())
    
 
 2. （结构）同一模型的不同版本，构成一个Family。
-   
+
    同一Family内的模型能力相近（`ModelInfo` ），但可以不同。
-   
+
    - 比如：`gpt-4o-mini-search-preview-2025-03-11` 和 `gpt-4o-search-preview-2025-03-11` 都属于 `ModelFamily.GPT_4O`
-   
+
    ```python
    class ModelFamily:
        """A model family is a group of models that share similar characteristics from a capabilities perspective. This is different to discrete supported features such as vision, function calling, and JSON output.
        ...
        """
    ```
-   
+
    注意：
-   
+
    - 实际上重要的是`ModelInfo`，而`ModelInfo`是以单个模型定义的，而不是以Famliy定义的。
    - 因此Famliy这一概念在代码中并无重要应用。
 
@@ -244,6 +245,7 @@ model_client = OpenAIChatCompletionClient(
        content: List[FunctionExecutionResult]
    
        type: Literal["FunctionExecutionResultMessage"] = "FunctionExecutionResultMessage"
+   ```
 
 
 
@@ -306,7 +308,7 @@ model_client = OpenAIChatCompletionClient(
 2. 调用 LLM 的单次结果返回
 
    `openai/types/chat/chat_completion.py`
-   
+
    ```python
    class Choice(BaseModel):
        finish_reason: Literal["stop", "length", "tool_calls", "content_filter", "function_call"]
@@ -345,12 +347,12 @@ model_client = OpenAIChatCompletionClient(
        
        ...
    ```
+
    
-   
 
 
 
-## 3. 抽象基类ChatCompletionClient
+## 1.4 抽象基类ChatCompletionClient
 
 `autogen_core/models/_model_client.py`
 
@@ -410,7 +412,7 @@ class ChatCompletionClient(ComponentBase[BaseModel], ABC):
 
 
 
-## 4. 具体实现
+## 1.5 具体实现
 
 主要实现在`BaseOpenAIChatCompletionClient`中，
 
@@ -418,7 +420,7 @@ class ChatCompletionClient(ComponentBase[BaseModel], ABC):
 
 `autogen_ext/models/openai/_openai_client.py`
 
-### 4.1  _process_create_args()
+### 1.5.1  _process_create_args()
 
 （主要逻辑，忽略了部分分支和辅助功能）
 
@@ -464,7 +466,7 @@ def _process_create_args(...):
 
 
 
-### 4.1 create()
+### 1.5.2 create()
 
 （主要逻辑，忽略了部分分支和辅助功能）
 
@@ -535,7 +537,7 @@ async def create(...):
 
 
 
-### 4.2 create_stream()
+### 1.5.3 create_stream()
 
 只保留核心逻辑
 
@@ -617,4 +619,5 @@ async def create_stream(...):
             except StopAsyncIteration:
                 break
 ```
+
 
