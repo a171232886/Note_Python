@@ -1,15 +1,16 @@
 # JSON Schema
 
-1. JSON Schema的官网：
+1. JSON Schme 是基于Json文件描述数据结构的跨语言通用标准。
+2. JSON Schema的官网：
 
    - https://json-schema.org/
    - https://json-schema.org/specification
 
    当前都是基于2020-12版本（最新）
 
-2. OpenAPI 规范中遵循的接口描述方式就是 JSON Schema
+3. OpenAPI 规范中遵循的接口描述方式（请求体和响应体）就是 JSON Schema
 
-3. 安装
+4. 安装
 
    ```
    pip install jsonschema
@@ -688,3 +689,19 @@ if not is_valid:
         print(f"{error['field']}: {error['message']}")
 ```
 
+# 5. Pydantic 和 JSON Schema
+
+1. Pydantic 提供转化成JSON Schema的函数 `BaseModel..model_json_schema()`
+
+   ```python
+   from pydantic import BaseModel
+   import json
+   
+   class User(BaseModel):
+       name: str
+       age: int
+   
+   # 生成 JSON Schema 字典
+   schema_dict = User.model_json_schema()
+   print(json.dumps(schema_dict, indent=2))
+   ```
