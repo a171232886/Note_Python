@@ -1,6 +1,6 @@
 # JSON Schema
 
-1. JSON Schme 是基于Json文件描述数据结构的跨语言通用标准。
+1. JSON Schema 是基于Json文件描述数据结构的跨语言通用标准。
 2. JSON Schema的官网：
 
    - https://json-schema.org/
@@ -705,3 +705,4 @@ if not is_valid:
    schema_dict = User.model_json_schema()
    print(json.dumps(schema_dict, indent=2))
    ```
+
