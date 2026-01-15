@@ -17,6 +17,8 @@ AutoGen 框架源码解析
    	B-->G(RunTime)
    	
    	H(Message)
+   	
+   	F-->I(Tool)
    ```
 
 
@@ -619,5 +621,801 @@ async def create_stream(...):
             except StopAsyncIteration:
                 break
 ```
+
+# 2. Tool
+
+## 2.1 样例代码(FunctionTool)
+
+FunctionTool的文档：https://microsoft.github.io/autogen/stable/reference/python/autogen_core.tools.html#autogen_core.tools.FunctionTool
+
+```python
+from autogen_core.tools import FunctionTool
+from autogen_core import CancellationToken
+from pydantic import BaseModel
+
+async def sentiment_analysis(text: str) -> dict:
+    """Given a text, return the sentiment."""
+    positive_words = {"happy", "joy", "love", "excellent", "good", "great"}
+    return positive_words
+
+tool = FunctionTool(sentiment_analysis, description="Sentiment Analysis", strict=True)
+
+async def run():
+
+    # example: run_json
+    result = await tool.run_json({"text": "I am very happy today!"}, CancellationToken())
+    print(result)
+
+    result_str = tool.return_value_as_string(result)
+    print(f"result as string: {result_str}")
+
+    # example: run example
+    class ArgsModel(BaseModel):
+        text: str
+
+    args = ArgsModel(text="I love programming!")
+    result2 = await tool.run(args, CancellationToken())
+    print(result2)
+
+async def save_load_example():
+    # example: save and load state
+    state = tool._to_config()
+    print(f"Saved state: {state}")
+
+    new_tool = FunctionTool._from_config(state)
+    print("State loaded successfully.")
+
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(run())
+    asyncio.run(save_load_example())
+```
+
+
+
+样例中输出的tool.schema
+
+```json
+{
+  "name": "sentiment_analysis",
+  "description": "Sentiment Analysis",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "description": "text",
+        "title": "Text",
+        "type": "string"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "additionalProperties": false
+  },
+  "strict": true
+}
+```
+
+
+
+## 2.2 Tool 基类和派生类
+
+### 2.2.1  Tool
+
+`autogen_core/tools/_base.py`
+
+一个Tool必须包含以下方法
+
+```python
+class Tool(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def description(self) -> str: ...
+
+    @property
+    def schema(self) -> ToolSchema: ...
+
+    def args_type(self) -> Type[BaseModel]: ...
+
+    def return_type(self) -> Type[Any]: ...
+
+    def state_type(self) -> Type[BaseModel] | None: ...
+
+    def return_value_as_string(self, value: Any) -> str: ...
+
+    async def run_json(
+        self, args: Mapping[str, Any], cancellation_token: CancellationToken, call_id: str | None = None
+    ) -> Any: ...
+
+    async def save_state_json(self) -> Mapping[str, Any]: ...
+
+    async def load_state_json(self, state: Mapping[str, Any]) -> None: ...
+        
+```
+
+
+
+### 2.2.3 UML类图
+
+```mermaid
+classDiagram
+    class Tool {
+        <<Protocol>>
+    }
+
+    class StreamTool {
+        <<Protocol>>
+        +run_json_stream()* async
+    }
+
+    class BaseTool {
+        <<Abstract>>
+        +schema()/name()/description() property
+        +run_json() async
+        +return_value_as_string()
+    }
+
+    class BaseStreamTool {
+        +run_json_stream() async
+    }
+
+    class FunctionTool {
+        +run() async
+        +_to_config()
+        +_from_config() classmethod
+    }
+
+    class HttpTool {
+        +run() async
+        +_to_config()
+        +_from_config() classmethod
+    }
+
+    class LangChainToolAdapter {
+        -_callable
+        +__init__()
+        +run() async
+    }
+
+    %% 继承关系
+    Tool <|-- StreamTool : 继承
+    Tool <|-- BaseTool : 实现
+    BaseTool <|-- BaseStreamTool : 继承
+    BaseTool <|-- FunctionTool : 继承
+    BaseTool <|-- HttpTool : 继承
+    BaseTool <|-- LangChainToolAdapter : 继承
+    StreamTool <|-- BaseStreamTool : 实现
+```
+
+注意：`BaseTool.run_json()`方法会调用子类的`run()`方法
+
+
+
+### 2.2.2 ToolSchema
+
+`autogen_core/tools/_base.py`
+
+（TypedDict 类似于使用pydantic定义了ToolSchema）
+
+```python
+class ParametersSchema(TypedDict):
+    type: str
+    properties: Dict[str, Any]
+    required: NotRequired[Sequence[str]]
+    additionalProperties: NotRequired[bool]
+        
+class ToolSchema(TypedDict):
+    parameters: NotRequired[ParametersSchema]
+    name: str
+    description: NotRequired[str]
+    strict: NotRequired[bool]			# 默认为False，schema是否只编写显示定义的参数
+```
+
+
+
+
+
+### 2.2.4 BaseTool
+
+（只列出了关键方法）
+
+```python
+class BaseTool(ABC, Tool, ComponentBase):
+    @property
+    def schema(self) -> ToolSchema:
+
+        # step 1: 获得一份Json Schema描述文件
+        # self._args_type is a Pydantic BaseModel
+        model_schema: Dict[str, Any] = self._args_type.model_json_schema()
+        ...
+
+        # step 2: 转换成 ParametersSchema 和 ToolSchema
+        parameters = ParametersSchema(
+            type="object",
+            properties=model_schema["properties"],
+            required=model_schema.get("required", []),
+            additionalProperties=model_schema.get("additionalProperties", False),
+        )
+
+        ...
+
+        tool_schema = ToolSchema(
+            name=self._name,
+            description=self._description,
+            parameters=parameters,
+            strict=self._strict,
+        )
+        return tool_schema
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def description(self) -> str:
+        return self._description
+
+
+    def return_value_as_string(self, value: Any) -> str:
+        if isinstance(value, BaseModel):
+            dumped = value.model_dump()
+            if isinstance(dumped, dict):
+                return json.dumps(dumped)
+            return str(dumped)
+
+        return str(value)
+
+    @abstractmethod
+    async def run(self, args: ArgsT, cancellation_token: CancellationToken) -> ReturnT: 
+        ...
+
+    async def run_json(
+        self, args: Mapping[str, Any], cancellation_token: CancellationToken, ...
+    ) -> Any:
+
+        # 调用子类的 run 方法
+        return_value = await self.run(self._args_type.model_validate(args), cancellation_token)
+        
+        return return_value
+```
+
+
+
+
+
+## 2.3 FunctionTool的实现
+
+### 2.3.1 描述
+
+```python
+class FunctionToolConfig(BaseModel):
+    """Configuration for a function tool."""
+
+    source_code: str
+    name: str
+    description: str
+    global_imports: Sequence[Import]		# 是否有依赖模块
+    has_cancellation_support: bool			# 是否支持async的cancel
+```
+
+
+
+### 2.3.2  FunctionTool 
+
+保留了主要逻辑
+
+```python
+class FunctionTool(BaseTool, Component):
+
+    def __init__(self, func: Callable[..., Any], description: str, name: str | None = None, 
+                 global_imports: Sequence[Import] = [], strict: bool = False) -> None:
+        
+        self._func = func
+        self._global_imports = global_imports
+
+        # step 1: 获取完整函数传入和传出参数描述
+        self._signature = get_typed_signature(func)
+        func_name = ...
+
+        # step 2: 生成函数参数模型 pydantic.BaseModel
+        args_model = args_base_model_from_signature(func_name + "args", self._signature)
+        ...
+
+        super().__init__(args_model, return_type, func_name, description, strict)
+
+    async def run(self, args: BaseModel, cancellation_token: CancellationToken) -> Any:
+
+        ...
+
+        if asyncio.iscoroutinefunction(self._func):
+            # 如果是coroutine函数，直接await调用
+            if self._has_cancellation_support:
+                result = await self._func(**kwargs, cancellation_token=cancellation_token)
+            else:
+                result = await self._func(**kwargs)
+        else:
+            # 如果是同步函数，创建一个新线程来调用，避免阻塞事件循环
+            if self._has_cancellation_support:
+                result = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    functools.partial(
+                        self._func,
+                        **kwargs,
+                        cancellation_token=cancellation_token,
+                    ),
+                )
+            else:
+                # 如果不支持cancel，封装一层再调用
+                future = asyncio.get_event_loop().run_in_executor(
+                    None, functools.partial(self._func, **kwargs)
+                )
+                cancellation_token.link_future(future)
+                result = await future
+
+        return result
+
+    def _to_config(self) -> FunctionToolConfig:
+        return FunctionToolConfig(
+            source_code=dedent(to_code(self._func)),
+            global_imports=self._global_imports,
+            name=self.name,
+            description=self.description,
+            has_cancellation_support=self._has_cancellation_support,
+        )
+
+    @classmethod
+    def _from_config(cls, config: FunctionToolConfig) -> Self:
+
+        # step 1： Execute imports first
+        for import_stmt in config.global_imports:
+            import_code = import_to_str(import_stmt)
+            try:
+                exec(import_code, exec_globals)
+            except :
+                ...
+
+
+        # step 2: build function code in the memory
+        try:
+            exec(config.source_code, exec_globals)
+            func_name = config.source_code.split("def ")[1].split("(")[0]
+        except Exception as e:
+            ...
+
+        # step 3: Get function and verify it's callable
+        func: Callable[..., Any] = exec_globals[func_name]
+        if not callable(func):
+            raise TypeError(f"Expected function but got {type(func)}")
+
+        return cls(func, name=config.name, description=config.description, global_imports=config.global_imports)
+
+```
+
+
+
+## 2.4 HttpTool
+
+1. 文档：[autogen_ext.tools.http — AutoGen 文档](https://msdocs.cn/autogen/stable/reference/python/autogen_ext.tools.http.html#autogen_ext.tools.http.HttpTool)
+
+2. `HttpTool` 内部使用 `httpx.AsyncClient`
+
+3. 灵活度不高，不推荐
+
+   - 比如无法处理流式响应或者文件上传等
+
+4. 样例代码
+
+   ```python
+   from autogen_core import CancellationToken
+   from autogen_ext.tools.http import HttpTool
+   
+   # Define a JSON schema for a base64 decode tool
+   base64_schema = {
+       "type": "object",
+       "properties": {
+           "value": {"type": "string", "description": "The base64 value to decode"},
+       },
+       "required": ["value"],
+   }
+   
+   # Create an HTTP tool for the httpbin API
+   tool = HttpTool(
+       name="base64_decode",
+       description="base64 decode a value",
+       scheme="https",
+       host="httpbin.org",
+       port=443,
+       path="/base64/{value}",
+       method="GET",
+       json_schema=base64_schema,
+   )
+   
+   
+   async def main():
+       result = await tool.run_json({"value": "YWJjZGU="}, CancellationToken())
+       print(result)
+   
+   import asyncio
+   asyncio.run(main())
+   ```
+
+   
+
+
+
+# 3. Workbench
+
+1. 官方定义
+
+   > A workbench is responsible for managing the lifecycle of the tools and **providing a single interface to call them**.
+
+2. 文档：[autogen_core.tools — AutoGen](https://microsoft.github.io/autogen/stable/reference/python/autogen_core.tools.html#autogen_core.tools.Workbench)
+
+   注意：
+
+   - `start() / stop() / reset()` 实际上没实现
+   - 一般使用的是`StaticStreamWorkbench`
+
+3. UML类图
+
+   ```mermaid
+   classDiagram
+       class Workbench {
+           <<Abstract>>
+       }
+       
+       class StreamWorkbench {
+           <<Abstract>>
+           +call_tool_stream()* 
+       }
+       
+       class StaticWorkbench {
+           +list_tools() async
+           +call_tool() async
+           +save_state() async
+           +load_state() async
+           -_to_config()
+           +_from_config() classmethod
+       }
+       
+       class StaticStreamWorkbench {
+           +call_tool_stream() async
+       }
+       
+       Workbench <|-- StreamWorkbench : 继承
+       Workbench <|-- StaticWorkbench : 继承
+       StaticWorkbench <|-- StaticStreamWorkbench : 继承
+       StreamWorkbench <|-- StaticStreamWorkbench : 继承
+   ```
+
+   
+
+## 3.1 样例代码
+
+```python
+from autogen_core.tools import FunctionTool, StaticStreamWorkbench
+from autogen_ext.tools.http import HttpTool
+
+async def sentiment_analysis(text: str) -> dict:
+    """Given a text, return the sentiment."""
+    positive_words = {"happy", "joy", "love", "excellent", "good", "great"}
+    return positive_words
+
+
+async def build():
+    tool1 = FunctionTool(sentiment_analysis, description="Sentiment Analysis", strict=True)
+    tool2 = HttpTool(
+        name="base64_decode",
+        description="base64 decode a value",
+        scheme="https",
+        host="httpbin.org",
+        port=443,
+        path="/base64/{value}",
+        method="GET",
+        json_schema={
+            "type": "object",
+            "properties": {
+                "value": {"type": "string", "description": "The base64 value to decode"},
+            },
+            "required": ["value"],
+        }
+    )
+
+
+    workbench = StaticStreamWorkbench(tools=[tool1, tool2])
+
+    return workbench
+
+async def run():
+    workbench = await build()
+
+    tool_list = await workbench.list_tools()
+    print("Available tools in the workbench:", tool_list)
+
+    result = await workbench.call_tool("sentiment_analysis", {"text": "I am very happy today!"})
+    print("Sentiment Analysis Result:", result)
+
+    result = await workbench.call_tool("base64_decode", {"value": "YWJjZGU="})
+    print("Sentiment Analysis Result:", result)
+
+
+async def save_load_example():
+    workbench = await build()
+
+    state = await workbench.save_state()
+    config = workbench._to_config()
+
+    # HttpTool 存在一些问题，导致失败
+    new_workbench = StaticStreamWorkbench._from_config(config)
+    await new_workbench.load_state(state)
+
+
+if __name__ == "__main__":
+    import asyncio
+    # asyncio.run(run())
+    asyncio.run(save_load_example())
+```
+
+
+
+## 3.2 Workbench基类
+
+```python
+class Workbench(ABC, ComponentBase[BaseModel]):
+
+    @abstractmethod
+    async def list_tools(self) -> List[ToolSchema]:
+        ...
+
+    @abstractmethod
+    async def call_tool(
+        self,
+        name: str,
+        arguments: Mapping[str, Any] | None = None,
+        cancellation_token: CancellationToken | None = None,
+        call_id: str | None = None,
+    ) -> ToolResult:
+        ...
+
+    @abstractmethod
+    async def start(self) -> None:
+        """
+        Start the workbench and initialize any resources.
+        """
+        ...
+
+    @abstractmethod
+    async def stop(self) -> None:
+        """
+        Stop the workbench and release any resources.
+        """
+        ...
+
+    @abstractmethod
+    async def reset(self) -> None:
+        """
+        Reset the workbench to its initialized, started state.
+        """
+        ...
+
+    @abstractmethod
+    async def save_state(self) -> Mapping[str, Any]:
+        """
+        Save the state of the workbench.
+        """
+        ...
+
+    @abstractmethod
+    async def load_state(self, state: Mapping[str, Any]) -> None:
+        """
+        Load the state of the workbench.
+        """
+        ...
+
+    async def __aenter__(self) -> Self:
+        await self.start()
+        return self
+
+    async def __aexit__(
+        self, exc_type: Optional[Type[BaseException]], exc_val: Optional[BaseException], exc_tb: Optional[TracebackType]
+    ) -> None:
+        await self.stop()
+
+
+```
+
+
+
+## 3.3 数据格式
+
+### 3.3.1 WorkbenchConfig
+
+```python
+class StaticWorkbenchConfig(BaseModel):
+    tools: List[ComponentModel] = []
+    tool_overrides: Dict[str, ToolOverride] = Field(default_factory=dict)
+```
+
+其中, `ToolOverride`几乎不会被用到
+
+```python
+class ToolOverride(BaseModel):
+    """Override configuration for a tool's name and/or description."""
+
+    name: Optional[str] = None
+    description: Optional[str] = None
+```
+
+
+
+### 3.3.2 ToolResult
+
+```python
+class ToolResult(BaseModel):
+    """
+    A result of a tool execution by a workbench.
+    """
+
+    type: Literal["ToolResult"] = "ToolResult"
+
+    name: str
+    """The name of the tool that was executed."""
+
+    result: List[ResultContent]
+    """The result of the tool execution."""
+
+    is_error: bool = False
+    """Whether the tool execution resulted in an error."""
+
+    def to_text(self, replace_image: str | None = None) -> str:
+        """
+        Convert the result to a text string.
+
+        Args:
+            replace_image (str | None): The string to replace the image content with.
+                If None, the image content will be included in the text as base64 string.
+
+        Returns:
+            str: The text representation of the result.
+        """
+        ...
+        return "\n".join(parts)
+```
+
+
+
+其中
+
+```python
+class TextResultContent(BaseModel):
+    """
+    Text result content of a tool execution.
+    """
+
+    type: Literal["TextResultContent"] = "TextResultContent"
+
+    content: str
+    """The text content of the result."""
+
+class ImageResultContent(BaseModel):
+    """
+    Image result content of a tool execution.
+    """
+
+    type: Literal["ImageResultContent"] = "ImageResultContent"
+
+    content: Image
+    """The image content of the result."""
+
+ResultContent = Annotated[TextResultContent | ImageResultContent, Field(discriminator="type")]
+
+```
+
+
+
+## 3.4 具体实现
+
+### 3.4.1  StaticWorkbench
+
+`call_tool()`核心逻辑
+
+- 调用`tool.run_json()`
+- 调用`tool.return_value_as_string()`
+
+```python
+class StaticWorkbench(Workbench, Component[StaticWorkbenchConfig]):
+    def __init__(
+        self, tools: List[BaseTool[Any, Any]], 
+        tool_overrides: Optional[Dict[str, ToolOverride]] = None
+    ) -> None:
+            self._tools = tools
+            ...
+
+    async def list_tools(self) -> List[ToolSchema]:
+        result_schemas: List[ToolSchema] = []
+        for tool in self._tools:
+            original_schema = tool.schema
+            ...
+            result_schemas.append(schema)
+        return result_schemas
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: Mapping[str, Any] | None = None,
+        cancellation_token: CancellationToken | None = None,
+        call_id: str | None = None,
+    ) -> ToolResult:
+
+        # step 1: get the tool
+        tool = next((tool for tool in self._tools if tool.name == original_name), None)
+        if tool is None:
+            return ToolResult(
+                name=name,  # Return the requested name (which might be overridden)
+                result=[TextResultContent(content=f"Tool {name} not found.")],
+                is_error=True,
+            )
+        
+        ...
+
+        # step 2: call the tool
+        result_future = asyncio.ensure_future(tool.run_json(arguments, cancellation_token, call_id=call_id))
+        actual_tool_output = await result_future
+        result_str = tool.return_value_as_string(actual_tool_output)
+
+        return ToolResult(name=name, result=[TextResultContent(content=result_str)], is_error=is_error)
+
+
+    async def save_state(self) -> Mapping[str, Any]:
+        tool_states = StateicWorkbenchState()
+        for tool in self._tools:
+            tool_states.tools[tool.name] = await tool.save_state_json()
+        return tool_states.model_dump()
+
+    async def load_state(self, state: Mapping[str, Any]) -> None:
+        parsed_state = StateicWorkbenchState.model_validate(state)
+        for tool in self._tools:
+            if tool.name in parsed_state.tools:
+                await tool.load_state_json(parsed_state.tools[tool.name])
+
+    def _to_config(self) -> StaticWorkbenchConfig:
+        return StaticWorkbenchConfig(
+            tools=[tool.dump_component() for tool in self._tools], tool_overrides=self._tool_overrides
+        )
+    
+    @classmethod
+    def _from_config(cls, config: StaticWorkbenchConfig) -> Self:
+        return cls(tools=[BaseTool.load_component(tool) for tool in config.tools],
+                   tool_overrides=config.tool_overrides)
+```
+
+
+
+
+
+###  3.4.2 StaticStreamWorkbench
+
+（主要逻辑，忽略了部分分支和辅助功能）
+
+```python
+async def call_tool_stream(...):
+    if isinstance(tool, StreamTool):
+        previous_result: Any | None = None
+        async for result in tool.run_json_stream(arguments, cancellation_token, call_id=call_id):
+            if previous_result is not None:
+                yield previous_result
+            previous_result = result
+         actual_tool_output = previous_result
+    else:
+         result_future = asyncio.ensure_future(tool.run_json(arguments, cancellation_token, call_id=call_id))
+         cancellation_token.link_future(result_future)
+         actual_tool_output = await result_future
+    yield ToolResult(...)
+```
+
 
 
