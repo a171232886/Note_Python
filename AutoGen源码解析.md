@@ -1,4 +1,4 @@
-# 源码解析
+#  源码解析
 
 AutoGen 框架源码解析
 
@@ -16,9 +16,10 @@ AutoGen 框架源码解析
    	B-->F(WorkBench)
    	B-->G(RunTime)
    	
-   	H(Message)
+   	H(Message) --- J("Message Handler")
    	
    	F-->I(Tool)
+   	
    ```
 
 
@@ -622,6 +623,10 @@ async def create_stream(...):
                 break
 ```
 
+
+
+
+
 # 2. Tool
 
 ## 2.1 样例代码(FunctionTool)
@@ -821,6 +826,8 @@ class ToolSchema(TypedDict):
 
 ### 2.2.4 BaseTool
 
+`autogen_core/tools/_base.py`
+
 （只列出了关键方法）
 
 ```python
@@ -888,6 +895,8 @@ class BaseTool(ABC, Tool, ComponentBase):
 
 
 ## 2.3 FunctionTool的实现
+
+`autogen_core/tools/_function_tool.py`
 
 ### 2.3.1 描述
 
@@ -998,6 +1007,8 @@ class FunctionTool(BaseTool, Component):
 
 
 ## 2.4 HttpTool
+
+`autogen_ext/tools/http/_http_tool.py`
 
 1. 文档：[autogen_ext.tools.http — AutoGen 文档](https://msdocs.cn/autogen/stable/reference/python/autogen_ext.tools.http.html#autogen_ext.tools.http.HttpTool)
 
@@ -1164,6 +1175,8 @@ if __name__ == "__main__":
 
 ## 3.2 Workbench基类
 
+`autogen_core/tools/_workbench.py`
+
 ```python
 class Workbench(ABC, ComponentBase[BaseModel]):
 
@@ -1254,6 +1267,8 @@ class ToolOverride(BaseModel):
 
 ### 3.3.2 ToolResult
 
+`autogen_core/tools/_workbench.py`
+
 ```python
 class ToolResult(BaseModel):
     """
@@ -1318,6 +1333,8 @@ ResultContent = Annotated[TextResultContent | ImageResultContent, Field(discrimi
 
 
 ## 3.4 具体实现
+
+`autogen_core/tools/_static_workbench.py`
 
 ### 3.4.1  StaticWorkbench
 
@@ -1418,4 +1435,746 @@ async def call_tool_stream(...):
 ```
 
 
+
+# 4. Message
+
+## 4.1 Message Type
+
+### 4.1.1 官方介绍
+
+1. 官方介绍：
+
+   - [Messages — AutoGen](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/messages.html)
+   - [Message and Communication — AutoGen](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/framework/message-and-communication.html#)
+
+   > At a high level, messages in AgentChat can be categorized into two types: **agent-agent messages** and an **agent’s internal events** and messages.
+   >
+   > 1. Agent-Agent
+   >
+   >    - [`TextMessage`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.messages.html#autogen_agentchat.messages.TextMessage) 
+   >    - [`MultiModalMessage`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.messages.html#autogen_agentchat.messages.MultiModalMessage)
+   >
+   >    The [`TextMessage`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.messages.html#autogen_agentchat.messages.TextMessage) and [`MultiModalMessage`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.messages.html#autogen_agentchat.messages.MultiModalMessage) we have created can be passed to agents directly via the [`on_messages`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.base.html#autogen_agentchat.base.ChatAgent.on_messages) method
+   >
+   > 2. Internal Events
+   >
+   >    subclasses of the base class [`BaseAgentEvent`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.messages.html#autogen_agentchat.messages.BaseAgentEvent)
+   >
+   >    -  [`ToolCallRequestEvent`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.messages.html#autogen_agentchat.messages.ToolCallRequestEvent)
+   >    -  [`ToolCallExecutionEvent`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.messages.html#autogen_agentchat.messages.ToolCallExecutionEvent)
+   >
+   >    Typically, events are created by the agent itself and are contained in the [`inner_messages`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.base.html#autogen_agentchat.base.Response.inner_messages) field of the [`Response`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.base.html#autogen_agentchat.base.Response) returned from [`on_messages`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.base.html#autogen_agentchat.base.ChatAgent.on_messages).
+
+   
+
+2. 整体上分为两类：Message 和Event 两部分
+
+   - 继承自 `BaseChatMessage` 的 message
+     - `TextMessage`，`MultiModalMessage`，…
+
+   - 继承自 `BaseAgentEvent` 的 Event
+     - `ToolCallRequestEvent`，…
+
+   
+
+3. 允许用户自定义Message
+
+   - 继承自  `BaseChatMessage` 或 `BaseAgentEvent`
+
+
+
+### 4.1.2 实际情况
+
+1. 部分（核心的）Message 和 Event的UML类图
+
+   (`autogen_agentchat/messages.py`)
+
+   ```mermaid
+   classDiagram
+       class BaseMessage {
+           <<Abstract>>
+           +to_text()
+           +dump()
+           +load()
+       }
+   
+       class BaseChatMessage {
+           <<Abstract>>
+           +source: str
+           +models_usage: RequestUsage | None
+           +metadata: Dict[str, str]
+           +to_model_text()* str
+           +to_model_message()* UserMessage
+       }
+   
+       class BaseTextChatMessage {
+           <<Abstract>>
+           +content: str
+           +to_text() str
+           +to_model_text() str
+           +to_model_message() UserMessage
+       }
+   
+       class BaseAgentEvent {
+           <<Abstract>>
+           +source: str
+           +models_usage: RequestUsage | None
+           +metadata: Dict[str, str]
+       }
+   
+       class TextMessage {
+           +type: Literal["TextMessage"]
+       }
+   
+       class MultiModalMessage {
+           +content: List[str | Image]
+           +type: Literal["MultiModalMessage"]
+           +to_model_text(image_placeholder: str | None) str
+           +to_text(iterm: bool) str
+           +to_model_message() UserMessage
+       }
+   
+       class StopMessage {
+           +type: Literal["StopMessage"]
+       }
+   
+       class ToolCallRequestEvent {
+           +content: List[FunctionCall]
+           +type: Literal["ToolCallRequestEvent"]
+           +to_text() str
+       }
+   
+       class SelectSpeakerEvent {
+           +content: List[str]
+           +type: Literal["SelectSpeakerEvent"]
+           +to_text() str
+       }
+   
+   
+       %% 继承关系
+       BaseMessage <|-- BaseChatMessage
+       BaseMessage <|-- BaseAgentEvent
+       
+       BaseChatMessage <|-- BaseTextChatMessage
+       BaseChatMessage <|-- MultiModalMessage
+       
+       BaseTextChatMessage <|-- TextMessage
+       BaseTextChatMessage <|-- StopMessage
+       
+       BaseAgentEvent <|-- ToolCallRequestEvent
+       BaseAgentEvent <|-- SelectSpeakerEvent
+   
+   ```
+
+2. `BaseChatMessage`和`BaseAgentEvent`都继承自`BaseMessage`
+
+   `BaseMessage`提供序列化和反序列化的方法：`load() / dump()`
+
+   - 因此以此为起点的Message、Event均可以序列化和反序列化
+
+
+
+3. 作用分析
+
+   - `TextMessage` 和 `MultiModalMessage` 实际上起到了官方文档中 **agent-agent messages **的作用
+
+   - `StopMessage`，`ToolCallRequestEvent `和 `SelectSpeakerEvent` 实际上起到了官方文档中  **agent’s internal events** 的作用
+
+   即，**继承自`BaseChatMessage`的Message 也可以起到 Event 的作用**
+
+
+
+### 4.1.3  Event 相关的类
+
+1. 继承自`BaseAgentEvent`的Event，通常都含有具体信息
+
+   - 作为某些信息的传递载体
+
+   | **序号** |             **名称**             | **描述**                                                     |
+   | :------: | :------------------------------: | ------------------------------------------------------------ |
+   |    1     | BaseAgentEvent(BaseMessage, ABC) | 基类                                                         |
+   |    2     |       ToolCallRequestEvent       | An  event signaling a request to use tools.                  |
+   |          |      ToolCallExecutionEvent      | An event signaling the execution of tool calls.              |
+   |    3     |       CodeGenerationEvent        | An  event signaling code generation event.                   |
+   |    4     |        CodeExecutionEvent        | An  event signaling code execution event.                    |
+   |    5     |     UserInputRequestedEvent      | An  event signaling a that the user proxy has requested user input. Published  prior to invoking the input callback. |
+   |    6     |         MemoryQueryEvent         | An  event signaling the results of memory queries.           |
+   |    7     |  ModelClientStreamingChunkEvent  | An  event signaling a text output chunk from a model client in streaming mode. |
+   |    8     |           ThoughtEvent           | An  event signaling the thought process of a model. It is used to communicate the  reasoning tokens generated by a reasoning model, or the extra text content  generated by a function call. |
+   |    9     |        SelectSpeakerEvent        | An  event signaling the selection of speakers for a conversation. |
+   |    10    |          SelectorEvent           | An  event emitted from the SelectorGroupChat.                |
+
+
+
+2. Group中的Event
+
+   - 没有AutoGen中的公共基类
+   - 仅充当信号，**保障Group的运行**
+   - 甚至类中没有具体实现的方法
+
+   | **序号** | **名称**                | **描述**                                                     |
+   | :------: | ----------------------- | ------------------------------------------------------------ |
+   |    1     | SerializableException   | A  serializable exception.                                   |
+   |    2     | GroupChatStart          | A  request to start a group chat.                            |
+   |    3     | GroupChatRequestPublish | A  request to publish a message to a group chat.             |
+   |    4     | GroupChatAgentResponse  | A  response published to a group chat.                       |
+   |    5     | GroupChatMessage        | A  request to publish a message to a group chat.             |
+   |    6     | GroupChatTermination    | A  message indicating that a group chat has terminated.      |
+   |    7     | GroupChatReset          | A  request to reset the agents in the group chat.            |
+   |    8     | GroupChatPause          | A  request to pause the group chat.                          |
+   |    9     | GroupChatResume         | A  request to resume the group chat.                         |
+   |    10    | GroupChatError          | A  message indicating that an error occurred in the group chat. |
+
+   
+
+3. logger模块中的Event，没有公共基类，仅作为记录点使用
+
+   - 作为日志记录点
+
+   | **序号** | **名称**                        | **描述**                                                     |
+   | -------- | ------------------------------- | ------------------------------------------------------------ |
+   | 1        | LLMCallEvent                    | To  be used by model clients to log the call to the LLM.     |
+   | 2        | LLMStreamStartEvent             | To  be used by model clients to log the start of a stream.   |
+   | 3        | LLMStreamEndEvent               | To  be used by model clients to log the end of a stream.     |
+   | 4        | ToolCallEvent                   | Used  by subclasses of autogen_core.tools.BaseTool to log executions of tools. |
+   | 5        | MessageEvent                    |                                                              |
+   | 6        | MessageDroppedEvent             |                                                              |
+   | 7        | MessageHandlerExceptionEvent    |                                                              |
+   | 8        | AgentConstructionExceptionEvent |                                                              |
+
+   
+
+### 4.1.4 实际情况总结
+
+1. 起到官方文档中  **agent-agent messages** 的作用
+   - 继承自`BaseChatMessage`的部分Message类
+2. 起到官方文档中  **agent’s internal events** 的作用，也就是构成框架运行机制的，都有哪些情况？
+   - 继承自`BaseAgentEvent`
+   - 没有继承自`BaseAgentEvent`的Group中的Event
+   - 继承自`BaseChatMessage`的部分Message类
+
+3. logger模块中的Event，称为"Event"
+   - 但未参与框架运行，仅作为日志记录点
+
+
+
+## 4.2 Message基类
+
+`autogen_agentchat/messages.py`
+
+1. BaseMessage
+
+   ```python
+   class BaseMessage(BaseModel, ABC):
+       def to_text(self) -> str:
+       def dump(self) -> Mapping[str, Any]:
+       def load(cls, data: Mapping[str, Any]) -> Self:
+   ```
+
+2. BaseChatMessage
+
+   ```python
+   class BaseChatMessage(BaseMessage, ABC):
+       id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+       """Unique identifier for this message."""
+     
+       source: str
+       """The name of the agent that sent this message."""
+     
+       models_usage: RequestUsage | None = None
+       """The model client usage incurred when producing this message."""
+     
+       metadata: Dict[str, str] = {}
+       """Additional metadata about the message."""
+     
+       created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+       """The time when the message was created."""
+     
+       def to_model_text(self) -> str:
+       def to_model_message(self) -> UserMessage:     
+   ```
+
+3. BaseTextChatMessage
+
+   ```python
+   class BaseTextChatMessage(BaseChatMessage, ABC):
+       """Base class for all text-only :class:`BaseChatMessage` types.
+       It has implementations for :meth:`to_text`, :meth:`to_model_text`,
+       and :meth:`to_model_message` methods.
+     
+       Inherit from this class if your message content type is a string.
+       """
+     
+       content: str
+       """The content of the message."""
+     
+       def to_text(self) -> str:
+           return self.content
+     
+       def to_model_text(self) -> str:
+           return self.content
+     
+       def to_model_message(self) -> UserMessage:
+           return UserMessage(content=self.content, source=self.source)
+   ```
+
+4. BaseAgentEvent
+
+   ```python
+   class BaseAgentEvent(BaseMessage, ABC):
+       """Base class for agent events.
+       """
+   
+       id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+       """Unique identifier for this event."""
+   
+       source: str
+       """The name of the agent that sent this message."""
+   
+       models_usage: RequestUsage | None = None
+       """The model client usage incurred when producing this message."""
+   
+       metadata: Dict[str, str] = {}
+       """Additional metadata about the message."""
+   
+       created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+       """The time when the message was created."""
+   ```
+
+
+
+
+
+# 5. Message Handlers
+
+## 5.1 Message Handlers 概念
+
+1. 官方描述
+
+   - When an agent receives a message the runtime will invoke the agent’s message handler ([`on_message()`](https://microsoft.github.io/autogen/stable/reference/python/autogen_core.html#autogen_core.Agent.on_message)) which should implement the agents message handling logic. 
+   - The [`RoutedAgent`](https://microsoft.github.io/autogen/stable/reference/python/autogen_core.html#autogen_core.RoutedAgent) base class provides a mechanism for associating message types with message handlers with the `message_handler()` decorator
+
+2. Message Handler ：用于处理 Message 的相关逻辑
+
+   - 动态分配：**可以根据不同的 Message Type，自动选择对应的处理函数**
+
+   - 自动注册：**自动注册处理函数**
+
+     
+
+3. Message Handler 功能的主要实现在 `RoutedAgent`中
+
+   - `autogen_core/_routed_agent.py` 中的设计展现了高水平的python应用技巧和设计理念，**但其中的部分做法相当不推荐**。
+
+     
+
+4. **此处重点分析`@message_handler`的相关逻辑，`@rpc`和`@event`逻辑大体相同**
+
+
+
+## 5.2 初识 RoutedAgent 
+
+### 5.2.1 介绍
+
+1. 与`AssistantAgent`不同，信息处理的程序逻辑也封装在一个叫"Agent"之中（RoutedAgent）
+
+   ```mermaid
+   classDiagram
+       class Agent{
+           <<Protocol>>
+           + bind_id_and_runtime(): abs
+           + on_message(): abs
+           + save_state(): abs
+           + load_state(): abs
+           + close(): abs
+       }
+   
+       class BaseAgent{
+           + on_message()
+           + send_message()
+           + publish_message()
+           + register()
+       }
+   
+       class RoutedAgent{
+           + on_message_impl()
+           + _discover_handlers() 
+       }
+   
+       BaseAgent <|-- RoutedAgent
+       Agent <|.. BaseAgent
+   ```
+
+   注意：这里的`Agent` 并不是 `AssistantAgent`的基类
+
+   - `RoutedAgent`和`AssistantAgent`是两条无交叉的继承链，详见`ChatAgentContainer`
+
+   - 此处就可以看出AutoGen团队，对Agent的概念存在重大改变
+
+     
+
+2. 在`BaseAgent`中，需要子类手动实现`on_message_impl()`方法
+
+   ```python
+   class BaseAgent(ABC, Agent):
+       @final
+       async def on_message(self, message: Any, ctx: MessageContext) -> Any:
+           return await self.on_message_impl(message, ctx)
+   
+       @abstractmethod
+       async def on_message_impl(self, message: Any, ctx: MessageContext) -> Any: ...
+   ```
+
+   
+
+3. RoutedAgent 的核心作用是管理子类中使用`@message_handler`的函数
+
+   - 根据输入的不同类型，动态地决定将使用哪个信息处理函数（被`@message_handler`修饰的）作为`on_message_impl()`的核心逻辑
+
+
+4. 个人看法：似无必要如此设计
+
+   - 根据不同的输入，选择不同的处理逻辑，这本身是用户逻辑，不应该由框架承担
+
+   - 如果由用户自行实现（策略模式）逻辑很简单，但由框架实现则十分困难
+
+   - 框架承担这部分选择逻辑后，用户在使用时未必对细节清楚，因此也不会放心。可能仍会更倾向于自己实现。
+
+   - 整体上，仍认为框架只需要用户实现一个预设的接口（比如`on_message_impl()`），而对其中的实现逻辑完全开放给用户即可。
+
+
+
+### 5.2.3 使用案例
+
+RoutedAgent 可以根据传入message的类型是`TextMessage` 还是`MultiModalMessage`，动态决定使用`on_text_message()`还是`on_image_message()`
+
+```python
+from autogen_core import AgentId, MessageContext, RoutedAgent, SingleThreadedAgentRuntime, message_handler
+from autogen_agentchat.messages import TextMessage, MultiModalMessage
+
+class MyAgent(RoutedAgent):
+    @message_handler
+    async def on_text_message(self, message: TextMessage, ctx: MessageContext) -> None:
+        print(f"Hello, {message.source}, you said {message.content}!")
+
+    @message_handler
+    async def on_image_message(self, message: MultiModalMessage, ctx: MessageContext) -> None:
+        print(f"Hello, {message.source}, you sent me {message.content}!")
+
+
+async def main():
+    runtime = SingleThreadedAgentRuntime()
+    await MyAgent.register(runtime, "my_agent", lambda: MyAgent("My Agent"))
+
+    runtime.start()
+    agent_id = AgentId("my_agent", "default")
+    await runtime.send_message(TextMessage(content="Hello, World!", source="User"), agent_id)
+    await runtime.send_message(MultiModalMessage(content=["http://example.com/image.png"], source="User"), agent_id)
+    await runtime.stop_when_idle()
+
+import asyncio
+asyncio.run(main())
+```
+
+
+
+案例中的信息传递的主要流程
+
+```
+SingleThreadedAgentRuntime.send_message() 
+--> ...(详见AgentRuntime) 
+--> SingleThreadedAgentRuntime._process_next() 
+--> SingleThreadedAgentRuntime._process_send() 
+--> BaseAgent.on_message()
+--> RoutedAgent.on_message_impl()
+--> 动态选择 MyAgent.on_text_message()
+```
+
+
+
+## 5.3  MessageHandler类
+
+RoutedAgent 中管理的 handler 元素是 MessageHandler 对象
+
+```python
+class MessageHandler(Protocol[AgentT, ReceivesT, ProducesT]):  
+    target_types: Sequence[type]							# 输入参数类型
+    produces_types: Sequence[type]							# 输出参数类型
+    is_message_handler: Literal[True]						# 判断是否为handler的标志
+    router: Callable[[ReceivesT, MessageContext], bool]		  # 用于判断是当前handler是否可被用来处理当前信息
+        
+    # agent_instance binds to self in the method
+    @staticmethod
+    async def __call__(agent_instance: AgentT, message: ReceivesT, ctx: MessageContext) -> ProducesT: ...
+```
+
+
+
+### 5.3.1 创建逻辑
+
+MessageHandler 对象的创建逻辑
+
+- **并非使用传统的 handler = MessageHandler(..) 创建方式 **
+
+而是基于以下两点，**在使用逻辑上等效创建**了MessageHandler 对象
+
+1. 使用了鸭子类型的概念：如果这个对象（dog）中，有我需要用到的一切方法和属性，那这个对象就是我认为的那个类（Duck）的对象，
+
+   - 因此我能向往常一样使用这个对象，
+
+   - 至于这个这个对象（dog）究竟是不是 Duck 类的对象，已经不重要了
+
+   这种"只看外在，不看本质"的思路，在编程时避免了复杂的继承关系，得到广泛认同和使用
+
+2. Python中一切皆对象，甚至可以向函数中添加属性
+
+   以下代码是能正常运行的。但相当不推荐下面风格！
+
+   函数就是函数，类就是类，这种代码编写风格会给代码阅读带来极大麻烦
+
+   ```python
+   def f(): 
+       pass
+   f.x = 1
+   f.y = 2
+   # 现在 f 就可以被当作有 x、y 属性的对象用了
+   
+   print(f.x)
+   ```
+
+   
+
+
+
+
+### 5.3.2 创建步骤
+
+MessageHandler 对象**创建**的主要步骤：
+
+1. 用户使用`@message_handler`装饰成员函数，进入到装饰器函数`message_handler()`的内部逻辑中
+
+2. `message_handler()内部逻辑`
+
+   - 首先进行对传入`func`（被装饰函数）进行类型解析，获得 `target_types`, `produces_types`
+
+   - 构建一个新函数 `wrapper()` 其中主要是执行`func()`
+
+   - 对`wrapper()`添加属性： `target_types`, `produces_types`，`is_message_handler`,  `router`
+
+
+   - 返回`wrapper()`
+
+此时
+
+- `wrapper()`即可以被认为是函数（`MessageHandler.__call__()`就是用于执行`wrapper()`内逻辑的）
+- `wrapper()`又可以被认为是 MessageHandler 对象（鸭子类型的概念）
+
+
+
+### 5.3.3  注册管理实现
+
+`autogen_core/_routed_agent.py` 中的`message_handler() `被作为装饰器函数
+
+（只展示核心逻辑）
+
+```python
+"""
+先做三个声明：可传入参数的类型组合
+"""
+@overload
+def message_handler(...) -> ...: ...
+
+@overload
+def message_handler(...) -> ...: ...
+
+@overload
+def message_handler(...) -> ...: ...
+
+"""
+message_handler() 具体实现
+"""
+def message_handler(
+    func: None | Callable[[AgentT, ReceivesT, MessageContext], Coroutine[Any, Any, ProducesT]] = None,
+    *,
+    strict: bool = True,
+    match: None | Callable[[ReceivesT, MessageContext], bool] = None,
+) -> (
+    Callable[
+        [Callable[[AgentT, ReceivesT, MessageContext], Coroutine[Any, Any, ProducesT]]],
+        MessageHandler[AgentT, ReceivesT, ProducesT],
+    ]
+    | MessageHandler[AgentT, ReceivesT, ProducesT]
+):
+    
+    """
+    由于 @message_handler() 可以传入参数，因此在实现上需要两层嵌套
+    详见python装饰器实现原理
+    """
+
+    def decorator(
+        func: Callable[[AgentT, ReceivesT, MessageContext], Coroutine[Any, Any, ProducesT]],
+    ) -> MessageHandler[AgentT, ReceivesT, ProducesT]:
+        
+        # step 1: 获取传入func的输入和输出参数列表
+        type_hints = get_type_hints(func)
+
+
+        # step 2: 获取输入message和输出return的类型列表
+        target_types = get_types(type_hints["message"])
+        return_types = get_types(type_hints["return"])
+
+
+        # step 3: 定义wrapper函数，调用原始函数
+        @wraps(func)
+        async def wrapper(self: AgentT, message: ReceivesT, ctx: MessageContext) -> ProducesT:
+            ...
+            return_value = await func(self, message, ctx)
+            ...
+            return return_value
+        
+        # step 4: 给wrapper函数添加属性, 让它变成一个MessageHandler
+        wrapper_handler = cast(MessageHandler[AgentT, ReceivesT, ProducesT], wrapper)
+        wrapper_handler.target_types = list(target_types)
+        wrapper_handler.produces_types = list(return_types)
+        wrapper_handler.is_message_handler = True               # 标记这是一个handler
+
+        # 如果有match函数，就用它，
+        # 否则默认返回True，相当于只要输入message类型匹配，这个handler就可以被使用
+        wrapper_handler.router = match or (lambda _message, _ctx: True)     
+
+        return wrapper_handler
+
+    if func is None and not callable(func):
+        return decorator
+    elif callable(func):
+        return decorator(func)
+    else:
+        raise ValueError("Invalid arguments")
+```
+
+
+
+## 5.4 RoutedAgent 实现逻辑
+
+在之前的案例中
+
+```python
+class MyAgent(RoutedAgent):
+    @message_handler
+    async def on_text_message(self, message: TextMessage, ctx: MessageContext) -> None:
+        print(f"Hello, {message.source}, you said {message.content}!")
+```
+
+on_text_message() 使用 message_handler() 进行装饰，已经可以认为是 MessageHandler 对象，
+
+并同时又是MyAgent实例的方法，也就是使用`dir(my_agent)`可以获取到 on_text_message() 这个方法。
+
+
+
+### 5.4.1 主要逻辑
+
+```python
+class RoutedAgent(BaseAgent):
+
+    def __init__(self, description: str) -> None:
+        # 用于存储handler的容器
+        # key: message type, value: list of handlers
+        self._handlers: DefaultDict[
+            Type[Any],
+            List[MessageHandler[RoutedAgent, Any, Any]],
+        ] = DefaultDict(list)
+
+        # 将已经注册的handler加入到容器中
+        #   就是在继承子类（链）中查找所有的使用@message_handler, @rpc, @event 的方法
+        handlers = self._discover_handlers()
+        for message_handler in handlers:
+            for target_type in message_handler.target_types:
+                self._handlers[target_type].append(message_handler)
+
+        super().__init__(description)
+
+    async def on_message_impl(self, message: Any, ctx: MessageContext) -> Any | None:
+        
+        # 根据message的类型，找到候选的handler
+        key_type: Type[Any] = type(message)
+        handlers = self._handlers.get(key_type)
+
+        # 依次尝试这些handler，找到第一个router返回True的handler，并调用它
+        if handlers is not None:
+            for h in handlers:
+                # h.router 是一个函数，接受message和ctx两个参数，返回bool
+                # 可以是用户在使用@message_handler()传入match()函数
+                # 也可以是MessageHandler类的默认router函数（直接返回True）
+                if h.router(message, ctx):
+                    return await h(self, message, ctx)
+        
+        # 如果没有找到合适的handler，调用on_unhandled_message
+        return await self.on_unhandled_message(message, ctx)
+
+    async def on_unhandled_message(self, message: Any, ctx: MessageContext) -> None:
+        logger.info(f"Unhandled message: {message}")
+
+    @classmethod
+    def _discover_handlers(cls) -> Sequence[MessageHandler[Any, Any, Any]]:
+        handlers: List[MessageHandler[Any, Any, Any]] = []
+
+        # 查找当前类的全部属性和方法
+        for attr in dir(cls):
+            # 过滤出可调用的属性（方法）
+            if callable(getattr(cls, attr, None)):
+                # 获取属性（方法）
+                handler = getattr(cls, attr)
+                # 关键点：如果这个属性（方法）有is_message_handler属性，说明它是一个MessageHandler对象
+                if hasattr(handler, "is_message_handler"):
+                    # 将其加入到handlers列表中
+                    handlers.append(cast(MessageHandler[Any, Any, Any], handler))
+        return handlers
+
+```
+
+
+
+### 5.4.2 rpc() 注册管理
+
+与`message_handler()`主要区别在于
+
+```python
+wrapper_handler.router = lambda _message, _ctx: (_ctx.is_rpc) and (match(_message, _ctx) if match else True)
+```
+
+默认的router判断方式，需要 _ctx.is_rpc = True 才返回 True
+
+
+
+### 5.4.3 event() 注册管理
+
+与`message_handler()`主要区别在于
+
+- wrapper 函数中没有返回值
+- wrapper_handler.router 的默认函数，需要_ctx.is_rpc = False 才返回 True
+
+```python
+def event(...):
+    def decorator(...):
+        ...
+    	@wraps(func)
+        async def wrapper(self: AgentT, message: ReceivesT, ctx: MessageContext) -> None:
+            if type(message) not in target_types:
+                if strict:
+                    raise CantHandleException(f"Message type {type(message)} not in target types {target_types}")
+                else:
+                    logger.warning(f"Message type {type(message)} not in target types {target_types}")
+
+            return_value = await func(self, message, ctx)  # type: ignore
+
+            if return_value is not None:
+                if strict:
+                    raise ValueError(f"Return type {type(return_value)} is not None.")
+                else:
+                    logger.warning(f"Return type {type(return_value)} is not None. It will be ignored.")
+
+            return None
+        ...
+	    wrapper_handler.router = lambda _message, _ctx: (not _ctx.is_rpc) and (match(_message, _ctx) if match else True)
+```
 
