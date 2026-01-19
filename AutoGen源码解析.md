@@ -2178,3 +2178,607 @@ def event(...):
 	    wrapper_handler.router = lambda _message, _ctx: (not _ctx.is_rpc) and (match(_message, _ctx) if match else True)
 ```
 
+# 6. 记忆
+
+1. AutoGen中的记忆分为两部分：
+
+   - 短期记忆：以`Model Context`实现，属于和LLM对话的上下文信息，临时存储
+   - 长期记忆：以`Memory`实现，负责将“有价值的信息”长期保存到数据库
+
+   
+
+2. 两种记忆的关系
+
+   - 每次 Agent 调用 LLM 前，都会先在`Memory`检索中检索相关信息，添加到`Model Context`中
+   - `Model Context`中的有用信息会更新`Memory`（待确认）
+
+3. Assistant Agent State 中包含的是`Model Context`
+
+   [Managing State — AutoGen](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/state.html#saving-and-loading-agents)
+
+   > For [`AssistantAgent`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.agents.html#autogen_agentchat.agents.AssistantAgent), its state consists of the model_context. If you write your own custom agent, consider overriding the [`save_state()`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.agents.html#autogen_agentchat.agents.BaseChatAgent.save_state) and [`load_state()`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.agents.html#autogen_agentchat.agents.BaseChatAgent.load_state) methods to customize the behavior. The default implementations save and load an empty state.
+
+
+
+## 6.1 短期记忆 Model Context
+
+1. 官方文档：[Model Context — AutoGen](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/components/model-context.html#model-context)
+2. 代码在`autogen_core/model_context/`中
+
+### 6.1.1 UML类图
+
+```mermaid
+classDiagram
+    class ChatCompletionContext {
+        <<abstract>>
+        +add_message() async
+        +get_messages()* abs
+        +clear() async
+        +save_state() async
+        +load_state() async
+    }
+
+    class BufferedChatCompletionContext {
+        +get_messages() async
+        +_to_config()
+        +_from_config() classmethod
+    }
+
+    class HeadAndTailChatCompletionContext {
+        +get_messages() async
+        +_to_config()
+        +_from_config() classmethod
+    }
+
+    class TokenLimitedChatCompletionContext {
+        +get_messages() async
+        +_to_config()
+        +_from_config() classmethod
+    }
+
+    class UnboundedChatCompletionContext {
+        +get_messages() async
+        +_to_config()
+        +_from_config() classmethod
+    }
+
+    ChatCompletionContext <|-- BufferedChatCompletionContext
+    ChatCompletionContext <|-- HeadAndTailChatCompletionContext
+    ChatCompletionContext <|-- TokenLimitedChatCompletionContext
+    ChatCompletionContext <|-- UnboundedChatCompletionContext
+```
+
+1. 几种Context的实现之间的主要区别在于`get_messages()`的实现
+   - 实际上把全部的上下文都保存下来了
+   - 但是在使用时每次取出的上下文，几个类不一样
+2. `AssistantAgent`中使用的是`UnboundedChatCompletionContext`
+
+
+
+### 6.1.2 ChatCompletionContext
+
+只是一个简单的消息列表，并实现了state的save/load
+
+```python
+class ChatCompletionContext(ABC, ComponentBase[BaseModel]):
+    component_type = "chat_completion_context"
+
+    def __init__(self, initial_messages: List[LLMMessage] | None = None) -> None:
+        self._messages: List[LLMMessage] = []
+        if initial_messages is not None:
+            self._messages.extend(initial_messages)
+        self._initial_messages = initial_messages
+
+    async def add_message(self, message: LLMMessage) -> None:
+        """Add a message to the context."""
+        self._messages.append(message)
+
+    @abstractmethod
+    async def get_messages(self) -> List[LLMMessage]: ...
+
+    async def clear(self) -> None:
+        """Clear the context."""
+        self._messages = []
+
+    async def save_state(self) -> Mapping[str, Any]:
+        return ChatCompletionContextState(messages=self._messages).model_dump()
+
+    async def load_state(self, state: Mapping[str, Any]) -> None:
+        self._messages = ChatCompletionContextState.model_validate(state).messages
+
+
+class ChatCompletionContextState(BaseModel):
+    messages: List[LLMMessage] = Field(default_factory=list)
+```
+
+
+
+### 6.1.3  具体实现
+
+1. `UnboundedChatCompletionContext`
+
+   ```python
+   class UnboundedChatCompletionContext(ChatCompletionContext, Component[UnboundedChatCompletionContextConfig]):
+       """An unbounded chat completion context that keeps a view of the all the messages."""
+   
+       component_config_schema = UnboundedChatCompletionContextConfig
+       component_provider_override = "autogen_core.model_context.UnboundedChatCompletionContext"
+   
+       async def get_messages(self) -> List[LLMMessage]:
+           # 返回全部信息
+           return self._messages
+   
+       def _to_config(self) -> UnboundedChatCompletionContextConfig:
+           return UnboundedChatCompletionContextConfig(initial_messages=self._initial_messages)
+   
+       @classmethod
+       def _from_config(cls, config: UnboundedChatCompletionContextConfig) -> Self:
+           return cls(initial_messages=config.initial_messages)
+   ```
+
+2. `BufferedChatCompletionContext`
+
+   ```python
+   class BufferedChatCompletionContext(ChatCompletionContext, Component[BufferedChatCompletionContextConfig]):
+       ... 
+       async def get_messages(self) -> List[LLMMessage]:
+           # 返回最近的 self._buffer_size 条信息
+           messages = self._messages[-self._buffer_size :]
+           # Handle the first message is a function call result message.
+           if messages and isinstance(messages[0], FunctionExecutionResultMessage):
+               # Remove the first message from the list.
+               messages = messages[1:]
+           return messages
+   ```
+
+   
+
+3. `HeadAndTailChatCompletionContext` 返回消息列表`self._messages`的头部和尾部的指定条数信息
+
+4. `TokenLimitedChatCompletionContext`根据`token`限制量返回message
+
+
+
+### 6.1.4 使用样例代码
+
+实际上实现了LLM的对轮对话
+
+```python
+from autogen_core import AgentId, MessageContext, RoutedAgent, SingleThreadedAgentRuntime, message_handler
+from autogen_core.model_context import BufferedChatCompletionContext
+from autogen_core.models import AssistantMessage, ChatCompletionClient, SystemMessage, UserMessage
+from autogen_agentchat.messages import TextMessage
+from model import qwen_model_client as model_client
+
+
+class SimpleAgentWithContext(RoutedAgent):
+    def __init__(self, model_client: ChatCompletionClient) -> None:
+        super().__init__("A simple agent")
+        self._system_messages = [SystemMessage(content="You are a helpful AI assistant.")]
+        self._model_client = model_client
+        self._model_context = BufferedChatCompletionContext(buffer_size=5)
+
+    @message_handler
+    async def handle_user_message(self, message: TextMessage, ctx: MessageContext) -> TextMessage:
+        # Prepare input to the chat completion model.
+        user_message = UserMessage(content=message.content, source="user")
+        # Add message to model context.
+        await self._model_context.add_message(user_message)
+        # Generate a response.
+        response = await self._model_client.create(
+            self._system_messages + (await self._model_context.get_messages()),
+            cancellation_token=ctx.cancellation_token,
+        )
+        # Return with the model's response.
+        assert isinstance(response.content, str)
+        # Add message to model context.
+        await self._model_context.add_message(AssistantMessage(content=response.content, source=self.metadata["type"]))
+
+        return TextMessage(content=response.content, source="assistant")
+
+async def main():
+
+    runtime = SingleThreadedAgentRuntime()
+    await SimpleAgentWithContext.register(
+        runtime,
+        "simple_agent_context",
+        lambda: SimpleAgentWithContext(model_client=model_client),
+    )
+    # Start the runtime processing messages.
+    runtime.start()
+    agent_id = AgentId("simple_agent_context", "default")
+
+    # First question.
+    message = TextMessage(content="Hello, what are some fun things to do in Seattle?", source="user")
+    print(f"Question: {message.content}")
+    response = await runtime.send_message(message, agent_id)
+    print(f"Response: {response.content}")
+    print("-----")
+
+    # Second question.
+    message = TextMessage(content="What was the first thing you mentioned?", source="user")
+    print(f"Question: {message.content}")
+    response = await runtime.send_message(message, agent_id)
+    print(f"Response: {response.content}")
+
+    # Stop the runtime processing messages.
+    await runtime.stop()
+    await model_client.close()
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
+```
+
+
+
+
+
+## 6.2 长期记忆 Memory
+
+1. 官方文档：[Memory and RAG — AutoGen](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/memory.html#)
+
+2. 实现分为两部分
+
+   - `autogen_core/memory/`中的抽象基类、数据结构和`ListMemory`
+
+   - `autogen_ext/memory`中重点实现的`ChromaDBVectorMemory`和`RedisMemory`
+
+     
+
+### 6.2.1 数据结构
+
+```python
+# 数据类型
+class MemoryMimeType(Enum):
+    """Supported MIME types for memory content."""
+
+    TEXT = "text/plain"
+    JSON = "application/json"
+    MARKDOWN = "text/markdown"
+    IMAGE = "image/*"
+    BINARY = "application/octet-stream"
+
+
+ContentType = Union[str, bytes, Dict[str, Any], Image]
+
+# 单条记忆内容
+class MemoryContent(BaseModel):
+    """A memory content item."""
+
+    content: ContentType
+    """The content of the memory item. It can be a string, bytes, dict, or :class:`~autogen_core.Image`."""
+
+    mime_type: MemoryMimeType | str
+    """The MIME type of the memory content."""
+
+    metadata: Dict[str, Any] | None = None
+    """Metadata associated with the memory item."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @field_serializer("mime_type")
+    def serialize_mime_type(self, mime_type: MemoryMimeType | str) -> str:
+        """Serialize the MIME type to a string."""
+        if isinstance(mime_type, MemoryMimeType):
+            return mime_type.value
+        return mime_type
+    
+# 检索结果
+class MemoryQueryResult(BaseModel):
+    """Result of a memory :meth:`~autogen_core.memory.Memory.query` operation."""
+
+    results: List[MemoryContent]
+```
+
+
+
+### 6.2.2 抽象基类Memory
+
+```python
+class Memory(ABC, ComponentBase[BaseModel]):
+    """Protocol defining the interface for memory implementations.
+
+    A memory is the storage for data that can be used to enrich or modify the model context.
+    """
+
+    component_type = "memory"
+
+    @abstractmethod
+    async def update_context(
+        self,
+        model_context: ChatCompletionContext,
+    ) -> UpdateContextResult:
+        """更新传入的短期记忆"""
+        ...
+
+    @abstractmethod
+    async def query(
+        self,
+        query: str | MemoryContent,
+        cancellation_token: CancellationToken | None = None,
+        **kwargs: Any,
+    ) -> MemoryQueryResult:
+        """记忆检索"""
+        ...
+
+    @abstractmethod
+    async def add(self, content: MemoryContent, cancellation_token: CancellationToken | None = None) -> None:
+        ...
+
+    @abstractmethod
+    async def clear(self) -> None:
+        """Clear all entries from memory."""
+        ...
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Clean up any resources used by the memory implementation."""
+        ...
+```
+
+
+
+### 6.2.3 简单实现：ListMemory
+
+只实现了基于List的Memory
+
+(只展示了核心方法)
+
+```python
+class ListMemory(Memory, Component[ListMemoryConfig]):
+    def __init__(self, name: str | None = None, memory_contents: List[MemoryContent] | None = None) -> None:
+        self._name = name or "default_list_memory"
+        self._contents: List[MemoryContent] = memory_contents if memory_contents is not None else []
+
+    async def update_context(
+        self,
+        model_context: ChatCompletionContext,
+    ):
+        # 将当前全部memory，形成一条新message，添加到model_context中
+        memory_strings = [f"{i}. {str(memory.content)}" for i, memory in enumerate(self._contents, 1)]
+
+        if memory_strings:
+            memory_context = "\nRelevant memory content (in chronological order):\n" + "\n".join(memory_strings) + "\n"
+            await model_context.add_message(SystemMessage(content=memory_context))
+
+
+    async def query(
+        self,
+        query: str | MemoryContent = "",
+        cancellation_token: CancellationToken | None = None,
+        **kwargs: Any,
+    ) -> MemoryQueryResult:
+        """Return all memories without any filtering.
+        """
+        return MemoryQueryResult(results=self._contents)
+
+    async def add(self, content: MemoryContent, cancellation_token: CancellationToken | None = None) -> None:
+        """Add new content to memory.
+        """
+        self._contents.append(content)
+
+    async def clear(self) -> None:
+        """Clear all memory content."""
+        self._contents = []
+```
+
+
+
+### 6.2.4 具体实现：**ChromaDBVectorMemory**
+
+官方文档：[autogen_ext.memory.chromadb — AutoGen](https://microsoft.github.io/autogen/stable/reference/python/autogen_ext.memory.chromadb.html#)
+
+（只保留核心逻辑）
+
+```python
+class ChromaDBVectorMemory(Memory, Component[ChromaDBVectorMemoryConfig]):
+
+    def __init__(self, config: ChromaDBVectorMemoryConfig | None = None) -> None:
+        self._config = config or PersistentChromaDBVectorMemoryConfig()
+        self._client: ClientAPI | None = None
+        self._collection: Collection | None = None
+
+
+    def _ensure_initialized(self) -> None:
+        """懒惰初始化"""
+
+        # step 1: 创建客户端
+        if self._client is None:
+            from chromadb.config import Settings
+            settings = Settings(allow_reset=self._config.allow_reset)
+            self._client = HttpClient(
+                host=self._config.host,
+                port=self._config.port,
+                ssl=self._config.ssl,
+                headers=self._config.headers,
+                settings=settings,
+                tenant=self._config.tenant,
+                database=self._config.database,
+            )
+
+        # step 2: 创建collection 
+        if self._collection is None:
+            # Create embedding function
+            embedding_function = self._create_embedding_function()
+
+            # Create or get collection with embedding function
+            self._collection = self._client.get_or_create_collection(
+                name=self._config.collection_name,
+                metadata={"distance_metric": self._config.distance_metric},
+                embedding_function=embedding_function,
+            )
+
+
+    def _create_embedding_function(self) -> Any:
+        """创建embedding model cliient"""
+        return embedding_functions.SentenceTransformerEmbeddingFunction(model_name=config.model_name)
+
+
+    def _extract_text(self, content_item: str | MemoryContent) -> str:
+        """Extract searchable text from content."""
+        if isinstance(content_item, str):
+            return content_item
+
+        content = content_item.content
+        mime_type = content_item.mime_type
+
+        if mime_type in [MemoryMimeType.TEXT, MemoryMimeType.MARKDOWN]:
+            return str(content)
+        elif mime_type == MemoryMimeType.JSON:
+            if isinstance(content, dict):
+                # Store original JSON string representation
+                return str(content).lower()
+
+    def _calculate_score(self, distance: float) -> float:
+        """Convert ChromaDB distance to a similarity score."""
+        if self._config.distance_metric == "cosine":
+            return 1.0 - (distance / 2.0)
+        return 1.0 / (1.0 + distance)
+
+    async def update_context(
+        self,
+        model_context: ChatCompletionContext,
+    ) -> UpdateContextResult:
+        
+        """更新短期记忆 model context"""
+        messages = await model_context.get_messages()
+        if not messages:
+            return UpdateContextResult(memories=MemoryQueryResult(results=[]))
+
+        # step 1：Extract query from last message
+        last_message = messages[-1]
+        query_text = last_message.content if isinstance(last_message.content, str) else str(last_message)
+
+        # step 2: Query memory and get results
+        query_results = await self.query(query_text)
+
+        # step 2: compact all to one string and add to context
+        if query_results.results:
+            # Format results for context
+            memory_strings = [f"{i}. {str(memory.content)}" for i, memory in enumerate(query_results.results, 1)]
+            memory_context = "\nRelevant memory content:\n" + "\n".join(memory_strings)
+
+            # Add to context
+            await model_context.add_message(SystemMessage(content=memory_context))
+
+        return UpdateContextResult(memories=query_results)
+
+    async def add(self, content: MemoryContent, cancellation_token: CancellationToken | None = None) -> None:
+        
+        # step 1: lazy initialization
+        self._ensure_initialized()
+
+        # step 2: add
+        # Extract text from content
+        text = self._extract_text(content)
+
+        # Use metadata directly from content
+        metadata_dict = content.metadata or {}
+        metadata_dict["mime_type"] = str(content.mime_type)
+
+        # Add to ChromaDB
+        self._collection.add(documents=[text], metadatas=[metadata_dict], ids=[str(uuid.uuid4())])
+
+    async def query(
+        self,
+        query: str | MemoryContent,
+        cancellation_token: CancellationToken | None = None,
+        **kwargs: Any,
+    ) -> MemoryQueryResult:
+        
+        # step 1: lazy initialization
+        self._ensure_initialized()
+
+
+        # step 2: query the vector datebase
+        # Extract text for query
+        query_text = self._extract_text(query)
+
+        # Query ChromaDB
+        results = self._collection.query(
+            query_texts=[query_text],
+            n_results=self._config.k,
+            include=["documents", "metadatas", "distances"],
+            **kwargs,
+        )
+
+
+        # step 3: process the result
+        # Convert results to MemoryContent list
+
+        # step 3.1: if the result is empty
+        memory_results: List[MemoryContent] = []
+
+        if (
+            not results
+            or not results.get("documents")
+            or not results.get("metadatas")
+            or not results.get("distances")
+        ):
+            return MemoryQueryResult(results=memory_results)
+
+        # step 3.2: extract the info and generate the result
+        documents: List[Document] = results["documents"][0] if results["documents"] else []
+        metadatas: List[Metadata] = results["metadatas"][0] if results["metadatas"] else []
+        distances: List[float] = results["distances"][0] if results["distances"] else []
+        ids: List[str] = results["ids"][0] if results["ids"] else []
+
+        for doc, metadata_dict, distance, doc_id in zip(documents, metadatas, distances, ids, strict=False):
+            # Calculate score
+            score = self._calculate_score(distance)
+            metadata = dict(metadata_dict)
+            metadata["score"] = score
+            metadata["id"] = doc_id
+            if self._config.score_threshold is not None and score < self._config.score_threshold:
+                continue
+
+            # Extract mime_type from metadata
+            mime_type = str(metadata_dict.get("mime_type", MemoryMimeType.TEXT.value))
+
+            # Create MemoryContent
+            content = MemoryContent(
+                content=doc,
+                mime_type=mime_type,
+                metadata=metadata,
+            )
+            memory_results.append(content)
+
+        return MemoryQueryResult(results=memory_results)
+
+
+    async def clear(self) -> None:
+        """
+        清除数据库中的当前collection下的数据
+        """
+        self._ensure_initialized()
+
+        results = self._collection.get()
+        if results and results["ids"]:
+            self._collection.delete(ids=results["ids"])
+
+
+    async def close(self) -> None:
+        """Clean up ChromaDB client and resources."""
+        self._collection = None
+        self._client = None
+
+    async def reset(self) -> None:
+        """
+        清除数据库中的全部信息
+        """
+        self._ensure_initialized()
+        self._client.reset()
+
+
+    def _to_config(self) -> ChromaDBVectorMemoryConfig:
+        """Serialize the memory configuration."""
+        return self._config
+
+    @classmethod
+    def _from_config(cls, config: ChromaDBVectorMemoryConfig) -> Self:
+        """Deserialize the memory configuration."""
+        return cls(config=config)
+
+```
+
