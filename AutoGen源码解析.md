@@ -2782,3 +2782,774 @@ class ChromaDBVectorMemory(Memory, Component[ChromaDBVectorMemoryConfig]):
 
 ```
 
+# 7. Agent
+
+UML类图
+
+```mermaid
+classDiagram
+    direction LR
+    class TaskRunner {
+        <<Protocol>>
+        +run() abs
+        +run_stream() abs
+    }
+
+    class ChatAgent {
+        <<Protocol>>
+        +name()  abs
+        +description()  abs
+        +produced_message_types() abs
+        +on_messages() abs
+        +on_messages_stream() abs
+        +on_reset() abs
+        +on_pause() abs
+        +on_resume() abs
+        +save_state() abs
+        +load_state() abs
+        +close() abs
+    }
+
+    class BaseChatAgent {
+        <<Abstract>>
+        +name()
+        +description()
+        +produced_message_types() abs
+        +on_messages() abs
+        +on_messages_stream()
+        +run()
+        +run_stream()
+        +on_reset() abs
+        +on_pause() abs
+        +on_resume() abs
+        +save_state()
+        +load_state()
+        +close()
+    }
+
+    class AssistantAgent {
+        +produced_message_types()
+        +model_context()
+        +on_messages()
+        +on_messages_stream()
+        +_add_messages_to_context()
+        +_update_model_context_with_memory()
+        +_call_llm()
+        +_process_model_result()
+        +_check_and_handle_handoff()
+        +_reflect_on_tool_use_flow()
+        +_summarize_tool_use()
+        +_execute_tool_call()
+        +on_reset()
+        +save_state() 
+        +load_state()
+        +_get_compatible_context()
+        +_to_config()
+        +_from_config()
+    }
+
+    TaskRunner <|-- ChatAgent : 继承
+    ChatAgent <|-- BaseChatAgent : 继承
+    BaseChatAgent <|-- AssistantAgent : 继承
+```
+
+
+
+1. `on_pause()` 和 `on_resume()`两个方法实际并未实现
+
+2. 以`AssistantAgent`为例
+
+   - `run() / run_stream()`两个最外层入口在`BaseChatAgent`中实现
+   - `on_messages() / on_messages_stream()` 两个核心处理逻辑在 `AssistantAgent`中实现
+
+3. `AssistantAgent`的实际调用逻辑
+
+   ```mermaid
+   flowchart
+   	A1["BaseChatAgent.run()"] --> B1["AssistantAgent.on_messages()"]
+   	A2["BaseChatAgent.run_stream()"]  --> B2["AssistantAgent.on_messages_stream()"]
+   	
+   	B1 --> B2
+   ```
+
+   
+
+4. `BaseChatAgent`中提供了默认的`on_messages_stream()`方法：调用子类的`on_messages() `方法
+
+   ```python
+       async def on_messages_stream(
+           self, messages: Sequence[BaseChatMessage], cancellation_token: CancellationToken
+       ) -> AsyncGenerator[BaseAgentEvent | BaseChatMessage | Response, None]:
+           response = await self.on_messages(messages, cancellation_token)
+           for inner_message in response.inner_messages or []:
+               yield inner_message
+           yield response
+   ```
+
+   
+
+
+
+## 7.1 抽象基类
+
+### 7.1.1 TaskRunner 和 TaskResult
+
+`autogen_agentchat/base/_task.py`
+
+```python
+class TaskResult(BaseModel):
+    """Result of running a task."""
+
+    messages: Sequence[SerializeAsAny[BaseAgentEvent | BaseChatMessage]]
+    """Messages produced by the task."""
+
+    stop_reason: str | None = None
+    """The reason the task stopped."""
+
+
+class TaskRunner(Protocol):
+    """A task runner."""
+
+    async def run(
+        self,
+        *,
+        task: str | BaseChatMessage | Sequence[BaseChatMessage] | None = None,
+        cancellation_token: CancellationToken | None = None,
+        output_task_messages: bool = True,
+    ) -> TaskResult:
+        pass
+
+    def run_stream(
+        self,
+        *,
+        task: str | BaseChatMessage | Sequence[BaseChatMessage] | None = None,
+        cancellation_token: CancellationToken | None = None,
+        output_task_messages: bool = True,
+    ) -> AsyncGenerator[BaseAgentEvent | BaseChatMessage | TaskResult, None]:
+        pass
+```
+
+
+
+### 7.1.2  ChatAgent 和 Response
+
+`autogen_agentchat/base/_chat_agent.py`
+
+```python
+class Response:
+    """A response from calling :meth:`ChatAgent.on_messages`."""
+
+    chat_message: SerializeAsAny[BaseChatMessage]
+    """A chat message produced by the agent as the response."""
+
+    inner_messages: Sequence[SerializeAsAny[BaseAgentEvent | BaseChatMessage]] | None = None
+    """Inner messages produced by the agent, they can be :class:`BaseAgentEvent`
+    or :class:`BaseChatMessage`."""
+```
+
+
+
+ChatAgent 是一个**抽象基类**，声明了Agent应该有的方法
+
+- 定义了 Agent 运行和启停等动作 
+
+```python
+class ChatAgent(ABC, TaskRunner, ComponentBase[BaseModel]):
+    """Protocol for a chat agent."""
+
+    component_type = "agent"
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+
+    @property
+    @abstractmethod
+    def description(self) -> str:
+
+    @property
+    @abstractmethod
+    def produced_message_types(self) -> Sequence[type[BaseChatMessage]]:
+
+    @abstractmethod
+    async def on_messages(self, messages: Sequence[BaseChatMessage], cancellation_token: CancellationToken) -> Response:
+        """Handles incoming messages and returns a response."""
+
+    @abstractmethod
+    def on_messages_stream(
+        self, messages: Sequence[BaseChatMessage], cancellation_token: CancellationToken
+    ) -> AsyncGenerator[BaseAgentEvent | BaseChatMessage | Response, None]:
+
+
+    @abstractmethod
+    async def on_reset(self, cancellation_token: CancellationToken) -> None:
+        """Resets the agent to its initialization state."""
+
+    @abstractmethod
+    async def on_pause(self, cancellation_token: CancellationToken) -> None:
+
+    @abstractmethod
+    async def on_resume(self, cancellation_token: CancellationToken) -> None:
+
+    @abstractmethod
+    async def save_state(self) -> Mapping[str, Any]:
+
+    @abstractmethod
+    async def load_state(self, state: Mapping[str, Any]) -> None:
+
+    @abstractmethod
+    async def close(self) -> None:
+```
+
+
+
+## 7.2 BaseChatAgent
+
+`BaseChatAgent`在`ChatAgent`基础上**添加并实现了**
+
+- `run()`
+- `run_stream()`
+
+注意：**`BaseChatAgent.run()`是事实上Agent运行的最外层入口**
+
+
+
+### 7.2.1 run() 
+
+（只保留核心逻辑）
+
+```python
+async def run(
+    self,
+    *,
+    task: str | BaseChatMessage | Sequence[BaseChatMessage] | None = None,
+    cancellation_token: CancellationToken | None = None,
+    output_task_messages: bool = True,
+) -> TaskResult:
+    
+    input_messages: List[BaseChatMessage] = []
+    output_messages: List[BaseAgentEvent | BaseChatMessage] = []
+   
+	# step 1: 针对不同类型的task，将其添加到input_messages中
+    if isinstance(task, str):
+        text_msg = TextMessage(content=task, source="user")
+        input_messages.append(text_msg)
+        if output_task_messages:
+            output_messages.append(text_msg)
+            
+    if isinstance(task, BaseChatMessage):
+        input_messages.append(task)
+        if output_task_messages:
+            output_messages.append(task)
+    
+    # step 2: 调用agent.on_messages()
+    response = await self.on_messages(input_messages, cancellation_token)
+    
+    # step 3: 生成结果
+    if response.inner_messages is not None:
+        output_messages += response.inner_messages
+    output_messages.append(response.chat_message)
+    
+    return TaskResult(messages=output_messages)
+```
+
+
+
+### 7.2.2 run_stream()
+
+（只保留核心逻辑）
+
+```python
+async def run_stream(
+    self,
+    *,
+    task: str | BaseChatMessage | Sequence[BaseChatMessage] | None = None,
+    cancellation_token: CancellationToken | None = None,
+    output_task_messages: bool = True,
+) -> AsyncGenerator[BaseAgentEvent | BaseChatMessage | TaskResult, None]:
+    
+    # ...
+    
+    # 与run()的主要区别在于，是通过async for调用的 on_messages_stream()
+    async for message in self.on_messages_stream(input_messages, cancellation_token):
+        if isinstance(message, Response):
+            yield message.chat_message
+            output_messages.append(message.chat_message)
+            yield TaskResult(messages=output_messages)
+        else:
+            yield message
+            if isinstance(message, ModelClientStreamingChunkEvent):
+               # Skip the model client streaming chunk events.
+               continue
+            output_messages.append(message)
+```
+
+
+
+### 7.2.3 save / load_state()
+
+```python
+    async def save_state(self) -> Mapping[str, Any]:
+        """Export state. Default implementation for stateless agents."""
+        return BaseState().model_dump()
+
+    async def load_state(self, state: Mapping[str, Any]) -> None:
+        """Restore agent from saved state. Default implementation for stateless agents."""
+        BaseState.model_validate(state)
+```
+
+
+
+### 7.2.4 运行实例
+
+代码执行时的调用流程
+
+```python
+result = await agent.run(task="What is the weather in New York?")
+```
+
+
+
+（假设只传入一条Messgae，而不是一个列表）
+
+```mermaid
+graph LR
+    A["main()"] -->|BaseChatMessage| B("BaseChatAgent.run()")
+    B -->|TaskResult| A
+    B -->|BaseChatMessage| C("AssistantAgent.on_messages()")
+    C -->|Response| B
+
+```
+
+
+
+数据流
+
+![image-20260119160731676](images/AutoGen源码分析/image-20260119160731676.png)
+
+
+
+
+
+
+
+
+
+## 7.3 AssistantAgent 
+
+### 7.3.1 整体介绍
+
+1. 官方文档：[autogen_agentchat.agents — AutoGen](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.agents.html#autogen_agentchat.agents.AssistantAgent)
+
+2. 官方文档中的流程图
+
+   ![assistant-agent](.\images\AutoGen源码分析\assistant-agent.svg)
+
+3. 详细定义了各种事件类型，比如
+
+   - `on_messages()` / `on_messages_stream()`
+
+   - `on_reset()`
+
+   并添加当前Agent特有的方法
+
+   - `_call_llm()`
+
+   - `_update_model_context_with_memory()`
+
+   - ` _execute_tool_call`
+
+   - `save_state()`
+
+   - `load_state()`
+
+
+
+### 7.3.2 `__init__()`
+
+```python
+    def __init__(
+        self, name, model_client, *,
+        tools = None,
+        workbench = None,
+        handoffs = None,
+        model_context = None,
+        description = "An agent that provides assistance with ability to use tools.",
+        system_message = "You are a helpful AI assistant. Solve tasks using your tools. Reply with TERMINATE when the task has been completed.",
+        model_client_stream = False,
+        reflect_on_tool_use = None,
+        max_tool_iterations = 1,
+        tool_call_summary_format = "{result}",
+        tool_call_summary_formatter = None,
+        output_content_type = None,
+        output_content_type_format = None,
+        memory = None,
+        metadata = None,
+    ):
+        super().__init__(name=name, description=description)
+        self._metadata = metadata or {}
+        self._model_client = model_client
+        self._model_client_stream = model_client_stream
+
+        # step 1：初始化输出类型
+        self._output_content_type: type[BaseModel] | None = output_content_type
+        self._output_content_type_format = output_content_type_format
+        self._structured_message_factory = ...
+        ...
+
+        # step 2: 初始化长期记忆 
+        self._memory = None
+        if memory is not None:
+            if isinstance(memory, list):
+                self._memory = memory
+        ...
+
+        # step 3: 初始化系统消息
+        self._system_messages: List[SystemMessage] = []
+        if system_message is None:
+            self._system_messages = []
+        else:
+            self._system_messages = [SystemMessage(content=system_message)]
+        
+        
+        # step 4: 初始化Tool
+        self._tools: List[BaseTool[Any, Any]] = []
+        if tools is not None:
+            for tool in tools:
+                if isinstance(tool, BaseTool):
+                    # step 4.1: 如果是 BaseTool 的实例，直接添加
+                    self._tools.append(tool)
+                elif callable(tool):
+                    # step 4.2: 如果是可调用对象，包装成 FunctionTool
+                    if hasattr(tool, "__doc__") and tool.__doc__ is not None:
+                        description = tool.__doc__
+                    else:
+                        description = ""
+                    self._tools.append(FunctionTool(tool, description=description))
+
+        # step 4.3: Check if tool names are unique.
+        tool_names = [tool.name for tool in self._tools]
+        if len(tool_names) != len(set(tool_names)):
+            raise ValueError(f"Tool names must be unique: {tool_names}")
+
+        # step 5: Handoff.
+        # step 5.1: 初始化 Handoff 工具
+        self._handoff_tools: List[BaseTool[Any, Any]] = []
+        self._handoffs: Dict[str, HandoffBase] = {}
+
+        ...
+
+        # step 5.2: Check if handoff tool names are unique.
+        handoff_tool_names = [tool.name for tool in self._handoff_tools]
+        if len(handoff_tool_names) != len(set(handoff_tool_names)):
+            raise ValueError(f"Handoff names must be unique: {handoff_tool_names}")
+        
+        # Create sets for faster lookup
+        tool_names_set = set(tool_names)
+        handoff_tool_names_set = set(handoff_tool_names)
+
+        # Check if there's any overlap between handoff tool names and tool names
+        overlap = tool_names_set.intersection(handoff_tool_names_set)
+        ...
+
+
+        # step 6: Workbench
+        if workbench is not None:
+            if self._tools:
+                raise ValueError("Tools cannot be used with a workbench.")
+            if isinstance(workbench, Sequence):
+                self._workbench = workbench
+            else:
+                self._workbench = [workbench]
+        else:
+            self._workbench = [StaticStreamWorkbench(self._tools)]
+
+        # step 7: Model context
+        if model_context is not None:
+            self._model_context = model_context
+        else:
+            self._model_context = UnboundedChatCompletionContext()
+
+        # step 8: Others
+        ...
+        self._is_running = False
+
+```
+
+
+
+
+### 7.3.3  on_messages_stream()
+
+on_messages() 中调用 on_messages_stream()
+
+```python
+async def on_messages(...):
+    async for message in self.on_messages_stream(messages, cancellation_token):
+        if isinstance(message, Response):
+            return message
+```
+
+
+
+```python
+async def on_messages_stream(
+    self,
+    messages: Sequence[BaseChatMessage],
+    cancellation_token: CancellationToken,
+) -> AsyncGenerator[Union[BaseAgentEvent, BaseChatMessage, Response], None]:
+    
+    # step 0: 创建临时变量
+    agent_name = self.name
+    model_context = self._model_context
+    memory = self._memory
+    system_messages = self._system_messages
+    workbench = self._workbench
+    handoff_tools = self._handoff_tools
+    handoffs = self._handoffs
+    model_client = self._model_client
+    model_client_stream = self._model_client_stream
+    reflect_on_tool_use = self._reflect_on_tool_use
+    max_tool_iterations = self._max_tool_iterations
+    tool_call_summary_format = self._tool_call_summary_format
+    tool_call_summary_formatter = self._tool_call_summary_formatter
+    output_content_type = self._output_content_type
+    
+    # step 1: 使用 message_context 统一管理全部信息
+    #  短期记忆 message_context 是 ChatCompletionContext 实例，可以认为就是一个存放消息的列表
+    # 	提供 add, get, clear, save, load 等基础操作
+    await self._add_messages_to_context(model_context, messages)
+    
+    # step 2: 将记忆更新到 model context 中
+    for event_msg in await self._update_model_context_with_memory(...): 
+        inner_messages.append(event_msg)
+    
+    # step 3: 调用LLM
+    async for inference_output in self._call_llm(...): 
+        if isinstance(inference_output, CreateResult):
+            model_result = inference_output
+        else:
+            # 返回中间信息
+            # Streaming chunk event
+            yield inference_output
+	
+	# step 4: 消息后处理
+	async for output_event in self._process_model_result(...):
+        yield output_event
+    
+```
+
+
+
+### 7.3.2 _call_llm()
+
+```python
+    async def _call_llm(cls,
+        model_client, model_client_stream, system_messages,
+        model_context, workbench, handoff_tools, agent_name,
+        cancellation_token, output_content_type, message_id,
+    ) -> AsyncGenerator[Union[CreateResult, ModelClientStreamingChunkEvent], None]:
+        """Call the language model with given context and configuration.
+        """
+        # step 1: 获取全部消息，忽略图片信息
+        all_messages = await model_context.get_messages()
+        llm_messages = cls._get_compatible_context(model_client=model_client, messages=system_messages + all_messages)
+        
+        # step 2: 获取工具
+        tools = [tool for wb in workbench for tool in await wb.list_tools()] + handoff_tools
+        
+        # step 3: 调用LLM Client
+        if model_client_stream:
+            model_result: Optional[CreateResult] = None
+
+            async for chunk in model_client.create_stream(
+                llm_messages,
+                tools=tools,
+                json_output=output_content_type,
+                cancellation_token=cancellation_token,
+            ):
+                if isinstance(chunk, CreateResult):
+                    model_result = chunk
+                elif isinstance(chunk, str):
+                    yield ModelClientStreamingChunkEvent(content=chunk, source=agent_name, full_message_id=message_id)
+                else:
+                    raise RuntimeError(f"Invalid chunk type: {type(chunk)}")
+            if model_result is None:
+                raise RuntimeError("No final model result in streaming mode.")
+            yield model_result
+        else:
+            model_result = await model_client.create(
+                llm_messages,
+                tools=tools,
+                cancellation_token=cancellation_token,
+                json_output=output_content_type,
+            )
+            yield model_result
+```
+
+
+
+### 7.3.3 _process_model_result()
+
+```python
+async def _process_model_result(
+    cls, model_result, inner_messages,
+    cancellation_token, agent_name, system_messages,
+    model_context, workbench, handoff_tools, handoffs,
+    model_client, model_client_stream,  reflect_on_tool_use,
+    tool_call_summary_format, tool_call_summary_formatter,
+    max_tool_iterations, output_content_type,
+    message_id, format_string,
+):
+    # PART A: 循环部分
+    for loop_iteration in range(max_tool_iterations):
+        
+        # step 1: 按指定格式输出文字结果
+        if isinstance(current_model_result.content, str):
+            if output_content_type:
+                content = output_content_type.model_validate_json(current_model_result.content)
+                yield Response(...)
+            else:
+                yield Response(...)
+            return
+        
+        # step 2：执行 Tool Call
+        # 该部分的设计相当精彩，结合了 异步+ 生产者 + 消费者 + 流式返回
+        
+        # step 2.1: 生产者部分
+        # stream 用于生产者和消费者之间的通信
+        stream = asyncio.Queue[BaseAgentEvent | BaseChatMessage | None]()
+        async def _execute_tool_calls(function_calls, stream_queue):
+            # _execute_tool_call() 中执行具体的工具调用
+            # 	并将调用结果放入 stream 中
+            results = await asyncio.gather(
+            	*[
+                    cls._execute_tool_call(
+                        tool_call=call,
+                        workbench=workbench,
+                        stream=stream_queue,
+                        ...
+                    )
+                    for call in function_calls
+                ]
+            )
+            # Signal the end of streaming by putting None in the queue.
+            stream_queue.put_nowait(None)
+            return results
+
+        task = asyncio.create_task(_execute_tool_calls(current_model_result.content, stream))
+        
+        # step 2.2: 消费者部分
+        while True:
+            event = await stream.get()
+            if event is None:
+                # End of streaming, break the loop.
+                break
+            if isinstance(event, BaseAgentEvent) or isinstance(event, BaseChatMessage):
+                yield event
+                inner_messages.append(event)
+            else:
+                raise RuntimeError(f"Unexpected event type: {type(event)}")
+
+        # step 2.3: 异步编程需要显式等待task完成
+        executed_calls_and_results = await task
+        exec_results = [result for _, result in executed_calls_and_results]
+        
+        # step 2.4: 调用结果保存
+        await model_context.add_message(FunctionExecutionResultMessage(content=exec_results))
+        inner_messages.append(tool_call_result_msg)
+        
+        # step 3: 处理 handoff 相关
+        handoff_output = cls._check_and_handle_handoff(...)
+        if handoff_output:
+            yield handoff_output
+            return
+        
+        # step 4: 再调用一次_call_llm()
+        async for llm_output in cls._call_llm(...):
+            if isinstance(llm_output, CreateResult):
+                next_model_result = llm_output
+            else:
+                # Streaming chunk event
+                yield llm_output
+        
+        current_model_result = next_model_result
+        
+        
+   # PART B：后处理
+   if reflect_on_tool_use:
+        # _reflect_on_tool_use_flow(...) 的主要逻辑就是调用model_client.create/create_stream() 获取响应
+        # 作用是将输出转换成指定格式
+        async for reflection_response in cls._reflect_on_tool_use_flow(...):
+            yield reflection_response
+   else:
+      # _summarize_tool_use 将工具调用输出为 ToolCallSummaryMessage 格式
+      yield cls._summarize_tool_use(...)
+   return
+```
+
+
+
+### 7.3.4 _execute_tool_call()
+
+（主要逻辑，忽略了部分分支和辅助功能）
+
+```python
+async def _execute_tool_call(
+    tool_call, workbench, handoff_tools,
+    agent_name, cancellation_token, stream,
+):
+    # step 1: 参数解包
+    arguments = json.loads(tool_call.arguments)
+    
+    # step 2: 针对handoff
+    for handoff_tool in handoff_tools:
+        if tool_call.name == handoff_tool.name:
+            # Run handoff tool call.
+            result = await handoff_tool.run_json(arguments, cancellation_token, call_id=tool_call.id)
+            result_as_str = handoff_tool.return_value_as_string(result)
+            return ( tool_call, FunctionExecutionResult(...) )
+        
+    # step 3: 针对WorkBench
+    for wb in workbench:
+        tool_result: ToolResult | None = None
+        async for event in wb.call_tool_stream(...):
+        	if isinstance(event, ToolResult):
+                tool_result = event
+             elif isinstance(event, BaseAgentEvent) or isinstance(event, BaseChatMessage):
+                await stream.put(event)
+        return ( tool_call, FunctionExecutionResult(...) )
+        
+```
+
+
+
+### 7.3.5  _check_and_handle_handoff()
+
+（主要逻辑，忽略了部分分支和辅助功能）
+
+```python
+def _check_and_handle_handoff(
+    model_result: CreateResult,
+    executed_calls_and_results: List[Tuple[FunctionCall, FunctionExecutionResult]],
+    inner_messages: List[BaseAgentEvent | BaseChatMessage],
+    handoffs: Dict[str, HandoffBase],
+    agent_name: str,
+):
+    # step 1: 提取出handoff
+    handoff_reqs = [call for call in model_result.content if isinstance(call, FunctionCall) and call.name in handoffs]
+    
+    # step 2: 提取相关消息
+    tool_calls: List[FunctionCall] = []
+    tool_call_results: List[FunctionExecutionResult] = []
+    selected_handoff = handoffs[handoff_reqs[0].name]
+    selected_handoff_message = selected_handoff.message
+    handoff_context: List[LLMMessage] = []
+    ...
+    
+    return Response(chat_message=HandoffMessage(...), inner_messages=inner_messages)
+```
+
+
+
+
