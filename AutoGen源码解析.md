@@ -3551,5 +3551,512 @@ def _check_and_handle_handoff(
 ```
 
 
+# 8. Termination
+
+1. 官方文档：[Termination — AutoGen](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/termination.html)
+
+2. 要点
+
+   - > A termination condition is a callable that takes a sequence of [`BaseAgentEvent`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.messages.html#autogen_agentchat.messages.BaseAgentEvent) or [`BaseChatMessage`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.messages.html#autogen_agentchat.messages.BaseChatMessage) objects **since the last time the condition was called**, and returns a [`StopMessage`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.messages.html#autogen_agentchat.messages.StopMessage) if the conversation should be terminated, or `None` otherwise.
+
+   - > Once a termination condition has been reached, it must be reset by calling [`reset()`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.base.html#autogen_agentchat.base.TerminationCondition.reset) before it can be used again. They are stateful but reset automatically after each run ([`run()`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.base.html#autogen_agentchat.base.TaskRunner.run) or [`run_stream()`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.base.html#autogen_agentchat.base.TaskRunner.run_stream)) is finished.
+
+   - > They can be combined using the AND and OR operators.
+
+
+
+## 8.1 Termination基类
+
+`autogen_agentchat/base/_termination.py`
+
+1. `TerminationCondition`定义了基础逻辑
+
+2. `AndTerminationCondition` 和 `OrTerminationCondition` 定义了两个Terminnation之间的逻辑运算
+
+   - ```
+     max_msg_termination | text_termination
+     ```
+
+   - ```
+     max_msg_termination & text_termination
+     ```
+
+
+
+### 8.1.1 TerminationCondition
+
+```python
+class TerminationCondition(ABC, ComponentBase[BaseModel]):
+    component_type = "termination"
+
+    @property
+    @abstractmethod
+    def terminated(self) -> bool:
+        """Check if the termination condition has been reached"""
+
+    @abstractmethod
+    async def __call__(self, messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> StopMessage | None:
+        """
+        传入Messages，判断是否满足Terminnation Condition
+        如果满足，返回StopMessage，不满足则返回None
+        """
+        ...
+
+    @abstractmethod
+    async def reset(self) -> None:
+        """Reset the termination condition."""
+        ...
+
+    def __and__(self, other: "TerminationCondition") -> "TerminationCondition":
+        """Combine two termination conditions with an AND operation."""
+        return AndTerminationCondition(self, other)
+
+    def __or__(self, other: "TerminationCondition") -> "TerminationCondition":
+        """Combine two termination conditions with an OR operation."""
+        return OrTerminationCondition(self, other)
+```
+
+注：
+
+```python
+combined_termination = max_msg_termination | text_termination
+
+# 相当于
+combined_termination = max_msg_termination.__or__(text_termination)
+```
+
+
+
+### 8.1.2 OrTerminationCondition
+
+```python
+class OrTerminationCondition(TerminationCondition, Component[OrTerminationConditionConfig]):
+
+    def __init__(self, *conditions: TerminationCondition) -> None:
+        self._conditions = conditions
+
+    @property
+    def terminated(self) -> bool:
+        # 只要有一个已经terminated，就返回True
+        return any(condition.terminated for condition in self._conditions)
+
+    async def __call__(self, messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> StopMessage | None:
+        if self.terminated:
+            raise RuntimeError("Termination condition has already been reached")
+        
+        # step 1：并发运行全部的condition
+        stop_messages = await asyncio.gather(*[condition(messages) for condition in self._conditions])
+        stop_messages_filter = [stop_message for stop_message in stop_messages if stop_message is not None]
+        
+        # step 2: 若没有任何StopMessage，就返回None，说明还没有达到条件
+        if len(stop_messages_filter) > 0:
+            # step 2：将单个的StopMessage，拼接成整体
+            content = ", ".join(stop_message.content for stop_message in stop_messages_filter)
+            source = ", ".join(stop_message.source for stop_message in stop_messages_filter)
+            return StopMessage(content=content, source=source)
+        
+        return None
+
+    async def reset(self) -> None:
+        for condition in self._conditions:
+            await condition.reset()
+
+    def _to_config(self) -> OrTerminationConditionConfig:
+        """Convert the OR termination condition to a config."""
+        return OrTerminationConditionConfig(conditions=[condition.dump_component() for condition in self._conditions])
+
+    @classmethod
+    def _from_config(cls, config: OrTerminationConditionConfig) -> Self:
+        """Create an OR termination condition from a config."""
+        conditions = [TerminationCondition.load_component(condition_model) for condition_model in config.conditions]
+        return cls(*conditions)
+
+```
+
+
+
+### 8.1.3 AndTerminationCondition
+
+仅在与或逻辑上与`OrTerminationCondition`有区别
+
+
+
+## 8.2 典型TextMention
+
+### 8.2.1 TextMentionTermination
+
+`autogen_agentchat/conditions/_terminations.py`
+
+（核心逻辑）
+
+```python
+    async def __call__(self, messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> StopMessage | None:
+        if self._terminated:
+            raise TerminatedException("Termination condition has already been reached")
+        for message in messages:
+            if self._sources is not None and message.source not in self._sources:
+                continue
+
+            content = message.to_text()
+            # 检查message中有没有出现预设的关键词self._termination_text
+            if self._termination_text in content:
+                self._terminated = True
+                return StopMessage(
+                    content=f"Text '{self._termination_text}' mentioned", source="TextMentionTermination"
+                )
+        return None
+```
+
+
+
+### 8.2.2 ExternalTermination
+
+`autogen_agentchat/conditions/_terminations.py`
+
+
+
+1. 用于实现Term的Stop：[Teams — AutoGen](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/teams.html#stopping-a-team)
+
+   > Calling [`set()`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.conditions.html#autogen_agentchat.conditions.ExternalTermination.set) on [`ExternalTermination`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.conditions.html#autogen_agentchat.conditions.ExternalTermination) will stop the team when the current agent’s turn is over. Thus, the team may not stop immediately. 
+
+   **并非立刻终止**
+
+2. 样例代码
+
+   ```python
+   # Create a new team with an external termination condition.
+   external_termination = ExternalTermination()
+   team = RoundRobinGroupChat(
+       [primary_agent, critic_agent],
+       termination_condition=external_termination | text_termination,  # Use the bitwise OR operator to combine conditions.
+   )
+   
+   # Run the team in a background task.
+   run = asyncio.create_task(Console(team.run_stream(task="Write a short poem about the fall season.")))
+   
+   # Wait for some time.
+   await asyncio.sleep(0.1)
+   
+   # Stop the team.
+   external_termination.set()
+   
+   # Wait for the team to finish.
+   await run
+   ```
+
+   
+
+3. `ExternalTermination`核心逻辑
+
+   ```python
+       def set(self) -> None:
+           """Set the termination condition to terminated."""
+           self._setted = True
+   	async def __call__(self, messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> StopMessage | None:
+           if self._terminated:
+               raise TerminatedException("Termination condition has already been reached")
+           if self._setted:
+               self._terminated = True
+               return StopMessage(content="External termination requested", source="ExternalTermination")
+           return None
+   ```
+
+
+
+## 8.3 CancellationToken
+
+(`autogen_core/_cancellation_token.py`)
+
+1. 用于实现Term的Abort，官方文档：[Teams — AutoGen](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/teams.html#aborting-a-team)
+
+   > Different from stopping a team, aborting a team will immediately stop the team and raise a [`CancelledError`](https://docs.python.org/3/library/asyncio-exceptions.html#asyncio.CancelledError) exception.
+
+   **立刻终止**
+
+2. 样例代码
+
+   ```python
+   from autogen_core import CancellationToken
+   # Create a cancellation token.
+   cancellation_token = CancellationToken()
+   
+   # Use another coroutine to run the team.
+   run = asyncio.create_task(
+       team.run(
+           task="Translate the poem to Spanish.",
+           cancellation_token=cancellation_token,
+       )
+   )
+   
+   # Cancel the run.
+   cancellation_token.cancel()
+   
+   try:
+       result = await run  # This will raise a CancelledError.
+   except asyncio.CancelledError:
+       print("Task was cancelled.")
+   ```
+
+   
+
+3. `CancellationToken`逻辑
+
+   基于python的`asyncio.Future.cancel()`实现：[Futures — Python 3.14.2 documentation](https://docs.python.org/3/library/asyncio-future.html#asyncio.Future.cancel)
+
+   ```python
+   class CancellationToken:
+       """A token used to cancel pending async calls"""
+   
+       def __init__(self) -> None:
+           self._cancelled: bool = False
+           self._lock: threading.Lock = threading.Lock()
+           self._callbacks: List[Callable[[], None]] = []
+   
+       def cancel(self) -> None:
+           """Cancel pending async calls linked to this cancellation token."""
+           with self._lock:
+               if not self._cancelled:
+                   self._cancelled = True
+                   for callback in self._callbacks:
+                       callback()
+   
+       def is_cancelled(self) -> bool:
+           """Check if the CancellationToken has been used"""
+           with self._lock:
+               return self._cancelled
+   
+       def add_callback(self, callback: Callable[[], None]) -> None:
+           """Attach a callback that will be called when cancel is invoked"""
+           with self._lock:
+               if self._cancelled:
+                   callback()
+               else:
+                   self._callbacks.append(callback)
+   
+       def link_future(self, future: Future[Any]) -> Future[Any]:
+           """Link a pending async call to a token to allow its cancellation"""
+           with self._lock:
+               if self._cancelled:
+                   future.cancel()
+               else:
+   
+                   def _cancel() -> None:
+                       future.cancel()
+   
+                   self._callbacks.append(_cancel)
+           return future
+   ```
+
+   
+
+4. 执行逻辑：
+
+   - 在`BaseGroupChat.run_stream()`中会将`CancellationToken`对象链接到当前`future`上
+
+     ```python
+                     if cancellation_token is not None:
+                         cancellation_token.link_future(message_future)
+     ```
+
+   - `CancellationToken.link_future()`中向`self._callbacks`添加回调函数，用于终断当前future的执行
+
+     ```python
+                     def _cancel() -> None:
+                         future.cancel()
+     ```
+
+   - `CancellationToken.cancel()`执行`self._callbacks`中全部的回调函数
+     - 执行`future.cancel()`
+
+
+
+
+
+# 9. Topic
+
+1. 关于AgentID：[Agent Identity and Lifecycle — AutoGen](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/core-concepts/agent-identity-and-lifecycle.html)
+2. 关于通信的两种方式：[Message and Communication — AutoGen](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/framework/message-and-communication.html#direct-messaging)
+   - 点对点：the sender must provide the recipient’s agent ID
+   - 广播：broadcast is one to many and the sender does not provide recipients’ agent IDs.
+3. 关于Topic的官方文档：[Topic and Subscription — AutoGen](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/core-concepts/topic-and-subscription.html)
+4. 基于广播（发布订阅）通信的好处
+   - sender 和 receiver 解耦
+   - sender 不必阻塞等待 receiver 的消息
+   - 实现可异步运行的事件驱动（event-driven）
+
+
+
+## 9.1 AgentID
+
+（`autogen_core/_agent_id.py`）
+
+注意：**此处的 Agent 是指`RoutedAgent`的子类，并非指`BaseChatAgent`的子类（如`AssistantAgent`）**
+
+1. Agent ID = (Agent Type, Agent Key)
+
+2. **agent type 不是指 agent class **
+   - 相同的 **agent factory function** 产生的 agent 具有相同的agent type
+     - agent type 的具体值，可设置
+
+   - For example, different factory functions can produce the same agent class but with different constructor parameters.
+
+3. agent key 用于区分相同 agent type 下的不同 agent 实例
+
+4. For example, `("code_reviewer", review_request_id)`.
+   - a runtime has registered the agent type `"code_reviewer"` with a factory function
+   - Each code review request has a unique ID `review_request_id`
+
+
+
+## 9.2 TopicID
+
+(`autogen_core/_topic.py`)
+
+1. Topic = (Topic Type, Topic Source)
+
+   - Topic Type 人为设置的Topic名称
+   - Topic Source 同一Topic Type下的不同Topic区分
+
+2. 比如，Topic = ( `"GitHub_Issues"` ,  `"github.com/{repo_name}/issues/{issue_number}"`
+
+3. 在实际使用中，通常只重视Topic Type
+
+   Topic = ( `f"group_topic_{self._team_id}"`, `...` )
+
+
+
+
+
+## 9.3 Subscription概念
+
+1. Subscription 的主要概念：
+
+   A subscription maps topic to agent IDs.
+
+![](images/AutoGen源码分析/subscription.svg)
+
+​      注意：If a topic has no subscription, messages published to this topic will not be delivered to any agent. 
+
+
+
+2. 图中的功能`Subscription`通过 `TypeSubscription`和`SubscriptionManager`共同实现
+
+   
+
+## 9.4 TypeSubscription
+
+（`autogen_core/_type_subscription.py`）
+
+1. `TypeSubscription` 是 抽象基类`Subscription`的具体实现
+
+   -  抽象基类`Subscription` 与 上一小节图中的 `Subscription`并不等价！
+
+2. `TypeSubscription` 管理的映射：Topic Type –> Agent Type
+
+   - agent id = agent type (同一个factory产生的) + agent key
+   - topic id = topic type（用户自定义名称）+ topic source
+
+   **一个 TypeSubscription 实例管理的是  topic type 与 agent type 之间的映射**
+
+   
+
+3. 核心逻辑具体实现
+
+   ```python
+   class TypeSubscription(Subscription):
+       
+       def __init__(self, topic_type: str, agent_type: str | AgentType, id: str | None = None):
+           self._topic_type = topic_type
+           if isinstance(agent_type, AgentType):
+               self._agent_type = agent_type.type
+           else:
+               self._agent_type = agent_type
+           self._id = id or str(uuid.uuid4())
+   
+   	...
+       def is_match(self, topic_id: TopicId) -> bool:
+           return topic_id.type == self._topic_type
+       
+       def map_to_agent(self, topic_id: TopicId) -> AgentId:
+           if not self.is_match(topic_id):
+               raise CantHandleException("TopicId does not match the subscription")
+   		# 注意返回的 AgentID 中的 key 是 topic_id.source
+           return AgentId(type=self._agent_type, key=topic_id.source)
+   
+   
+   ```
+
+   简单使用
+
+   ```python
+   from autogen_core import TypeSubscription
+   subscription = TypeSubscription(topic_type="t1", agent_type="a1")
+   subscription = TypeSubscription(topic_type="t1", agent_type="a2")
+   ```
+
+   
+
+
+
+## 9.5 SubscriptionManager
+
+`autogen_core/_runtime_impl_helpers.py`
+
+在`SingleThreadedAgentRuntime`中使用
+
+```python
+class SubscriptionManager:
+    def __init__(self) -> None:
+        # 每个 Subscription 是 agent type 与 topic type 之间的映射 
+        self._subscriptions: List[Subscription] = []
+        # topic id = (topic type, topic source)
+        self._seen_topics: Set[TopicId] = set()
+            
+        # 根据 self._subscriptions 和 self._seen_topics 实时维护的一个字典，
+        # 每个topic id都对应到哪些agent id
+        self._subscribed_recipients: DefaultDict[TopicId, List[AgentId]] = defaultdict(list)
+
+    async def add_subscription(self, subscription: Subscription) -> None:
+        # Check if the subscription already exists
+        if any(sub == subscription for sub in self._subscriptions):
+            raise ValueError("Subscription already exists")
+
+        self._subscriptions.append(subscription)
+        self._rebuild_subscriptions(self._seen_topics)
+
+    async def remove_subscription(self, id: str) -> None:
+        # Check if the subscription exists
+        if not any(sub.id == id for sub in self._subscriptions):
+            raise ValueError("Subscription does not exist")
+
+        def is_not_sub(x: Subscription) -> bool:
+            return x.id != id
+
+        self._subscriptions = list(filter(is_not_sub, self._subscriptions))
+
+        # Rebuild the subscriptions
+        self._rebuild_subscriptions(self._seen_topics)
+
+    async def get_subscribed_recipients(self, topic: TopicId) -> List[AgentId]:
+        if topic not in self._seen_topics:
+            self._build_for_new_topic(topic)
+        return self._subscribed_recipients[topic]
+
+    # TODO: optimize this...
+    def _rebuild_subscriptions(self, topics: Set[TopicId]) -> None:
+        self._subscribed_recipients.clear()
+        for topic in topics:
+            self._build_for_new_topic(topic)
+
+    def _build_for_new_topic(self, topic: TopicId) -> None:
+        # 添加新topic
+        self._seen_topics.add(topic)
+        for subscription in self._subscriptions:
+            if subscription.is_match(topic):
+                self._subscribed_recipients[topic].append(subscription.map_to_agent(topic))
+```
+
+
+
 
 
