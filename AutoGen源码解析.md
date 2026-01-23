@@ -4,24 +4,6 @@ AutoGen 框架源码解析
 
 1. 版本：autogen-core 0.7.5
 
-2. 大致目录（不断完善中）
-
-   ```mermaid
-   flowchart TB
-   	A("Team (Group)") --> C(Termination)
-   	A --> B(Agent)
-   	A --> D(RunTime)
-   	
-   	B-->E(Model Client)
-   	B-->F(WorkBench)
-   	B-->G(RunTime)
-   	
-   	H(Message) --- J("Message Handler")
-   	
-   	F-->I(Tool)
-   	
-   ```
-
 
 
 # 1. Model Client
@@ -4056,6 +4038,2238 @@ class SubscriptionManager:
                 self._subscribed_recipients[topic].append(subscription.map_to_agent(topic))
 ```
 
+
+# 10. AgentRuntime
+
+`AgentRuntime` 是一个抽象基类
+
+- 通信机制的具体实现
+
+- ###### agent生命周期管理
+
+主要的实现在`SingleThreadedAgentRuntime`（简称为 STAR）
+
+
+
+## 10.1 介绍
+
+1. AgentRunime介绍：[Agent Runtime Environments — AutoGen](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/core-concepts/architecture.html)
+
+   >  facilitates communication between agents, manages their identities and lifecycles, and enforce security and privacy boundaries.
+
+   有两种类型：*standalone* 和 *distributed*
+
+2. an example of standalone runtime is the [`SingleThreadedAgentRuntime`](https://microsoft.github.io/autogen/stable/reference/python/autogen_core.html#autogen_core.SingleThreadedAgentRuntime)
+
+   ![architecture-standalone.svg](images/AutoGen源码分析/architecture-standalone.svg)
+
+3. ###### UML图
+
+   ```mermaid
+   classDiagram
+       direction LR
+       class AgentRuntime {
+           <<Protocol>>
+           + send_message() abs
+           + publish_message() abs
+           + register_factory() abs
+           + save_state() abs
+           + load_state() abs
+           + add_subscription() abs
+           + remove_subscription() abs
+       }
+       
+       class SingleThreadedAgentRuntime{
+       	- _process_send()
+       	- _process_publish()
+       	- _process_response()
+       	- _process_next()
+       	- _get_agent()
+       	+ send_message()
+       	+ publish_message()
+       	+ save_state()
+       	+ load_state()
+       	+ start()
+       	+ stop/stop_when_idle/stop_when()
+       	+ close()
+       	+ register_factory()
+       	+ add_subscription()
+       	+ remove_subscription()
+       }
+       
+       class GrpcWorkerAgentRuntime{
+       }
+       
+       AgentRuntime <|-- SingleThreadedAgentRuntime
+       AgentRuntime <|-- GrpcWorkerAgentRuntime
+   ```
+
+   
+
+4. `SingleThreadedAgentRuntime`官方文档：[autogen_core — AutoGen](https://microsoft.github.io/autogen/stable/reference/python/autogen_core.html#autogen_core.SingleThreadedAgentRuntime)
+
+   > A single-threaded agent runtime that processes all messages using a single asyncio queue. Messages are delivered in the order they are received, and the runtime processes each message in a separate asyncio task concurrently.
+
+
+
+## 10.2 样例代码
+
+```python
+# agnents.py
+from autogen_core import AgentId, TopicId, MessageContext, RoutedAgent, message_handler
+from autogen_agentchat.messages import TextMessage
+
+
+class ReceiverAgent(RoutedAgent):
+    @message_handler
+    async def on_text_message(self, message: TextMessage, ctx: MessageContext) -> TextMessage:
+        print(f"ReceiverAgent received text from {message.source}: {message.content}")
+        return TextMessage(content=f"Received your message: {message.content}", source="ReceiverAgent")
+
+
+class SubscriberAgent(RoutedAgent):
+
+    @message_handler
+    async def on_text_message(self, message: TextMessage, ctx: MessageContext) -> None:
+        print(f"SubscriberAgent received text from {message.source}: {message.content}")
+
+
+class HandlerAgent(RoutedAgent):
+
+    def __init__(self, name, description):
+        self.name = name
+        super().__init__(description)
+
+    async def handler_broadcast(self, text: str) -> None:
+        print(f"HandlerAgent broadcasting message: {text}")
+        await self.publish_message(
+            message=TextMessage(content="HandlerAgent Broadcast", source=self.name),
+            topic_id=TopicId(type="default", source=self.name)
+        )
+
+    async def handler_send(self, target_agent_id: AgentId, text: str) -> None:
+        print(f"HandlerAgent sending message to {target_agent_id}: {text}")
+        await self.send_message(
+            message=TextMessage(content=f"HandlerAgent says: {text}", source=self.name),
+            recipient=target_agent_id
+        )
+
+    @message_handler
+    async def on_text_message(self, message: TextMessage, ctx: MessageContext) -> None:
+
+        if "broadcast" in message.content.lower():
+            await self.handler_broadcast(text=message.content)
+
+        elif "send" in message.content.lower():
+            target_agent_id = AgentId(type="receiver_agent", key="default")
+            await self.handler_send(target_agent_id=target_agent_id, text=message.content)
+
+        else:
+            print(f"HandlerAgent received text from {message.source}: {message.content}")
+```
+
+
+
+```python
+# main.py
+import os, sys
+sys.path.append(
+    os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+)
+
+from agents import HandlerAgent, ReceiverAgent, SubscriberAgent
+from autogen_core import AgentId, TopicId, SingleThreadedAgentRuntime, TypeSubscription
+from autogen_agentchat.messages import TextMessage
+
+async def main():
+
+    runtime = SingleThreadedAgentRuntime()
+    
+    await ReceiverAgent.register(
+        runtime,
+        type="receiver_agent",
+        factory=lambda: ReceiverAgent("Receiver Agent")
+    )
+
+    await SubscriberAgent.register(
+        runtime,
+        type="subscriber_agent",
+        factory=lambda: SubscriberAgent("Subscriber Agent")
+    )
+
+    await HandlerAgent.register(
+        runtime,
+        type="hander_agent",
+        factory=lambda: HandlerAgent(name="Hander Agent", description="Handles broadcasting and sending messages")
+    )
+
+    await runtime.add_subscription(TypeSubscription(topic_type="default", agent_type="subscriber_agent"))
+    await runtime.add_subscription(TypeSubscription(topic_type="default", agent_type="receiver_agent"))
+
+    runtime.start()
+
+    hander_agent_id = AgentId(type="hander_agent", key="default")
+
+    print("========= Sending test messages to HandlerAgent =========")
+    await runtime.send_message(
+        message=TextMessage(content="Hello", source="TestSuite"),
+        recipient=hander_agent_id
+    )
+
+
+    print("\n========= Broadcasting and Sending via HandlerAgent =========")
+    await runtime.send_message(
+        message=TextMessage(content="This is a broadcast message", source="TestSuite"),
+        recipient=hander_agent_id
+    )
+
+    await runtime.send_message(
+        message=TextMessage(content="Please send a message to the receiver agent", source="TestSuite"),
+        recipient=hander_agent_id
+    )
+
+    print("\n========= General Broadcast =========")
+    await runtime.publish_message(
+        message=TextMessage(content="General broadcast message", source="TestSuite"),
+        topic_id=TopicId(type="default", source="TestSuite")
+    )
+    await runtime.stop_when_idle()
+
+import asyncio
+asyncio.run(main())
+```
+
+
+
+## 10.3 启停管理
+
+(`autogen_core/_single_threaded_agent_runtime.py`)
+
+### 10.3.1 RunContext与start
+
+**`SingleThreadedAgentRuntime` 和 `RunContext` 为关联关系，相互引用**
+
+1. 两者调用关系
+
+   - `STAR.start()` 创建 RunContext 实例， 调用`RunContext.__init__`(STAR实例runtime)
+
+   - `RunContext.__init__() ` 将 `RunContext._run()` 添加到Event Loop中
+
+   - `RunContext._run() `  
+
+     ```python
+         async def _run(self) -> None:
+             while True:
+                 if self._stopped.is_set():
+                     return
+     
+                 await self._runtime._process_next()  # type: ignore
+     ```
+
+     不断调用`STAR._process_next()`，直到收到结束信号
+
+     self._stopped 是一个 asyncio.Event()
+
+   - `STAR._process_next()` 中从消息队列中获取一个消息，并根据消息类型进行不同处理
+
+     ```
+     SendMessageEnvelope --> STAR._process_send()
+     PublishMessageEnvelope --> STAR._process_publish()
+     ResponseMessageEnvelope --> STAR._process_response()
+     ```
+
+     在调用对应函数前，首先调用`InterventionHandler`进行消息预处理？
+
+   
+
+2. Send 属于 Agent 之间的点对点通信
+
+   发送消息，并获取响应
+
+   ```
+   Send a message to an agent and get a response.
+   ```
+
+   
+
+3. Publish 属于广播消息，不期待马上有响应
+
+   ```
+   Publish a message to all agents in the given namespace, or if no namespace is provided, the namespace of the sender.
+   
+           No responses are expected from publishing.
+   ```
+
+   
+
+4. Response 
+
+   ```python
+   async def _process_response(self, message_envelope: ResponseMessageEnvelope):
+       # 核心部分就是设置结果值
+       message_envelope.future.set_result(message_envelope.message)
+   ```
+
+   
+
+
+
+### 10.3.2 RunContext与Stop
+
+源码
+
+```python
+class RunContext:
+    def __init__(self, runtime: SingleThreadedAgentRuntime) -> None:
+        self._runtime = runtime
+        self._run_task = asyncio.create_task(self._run())
+        self._stopped = asyncio.Event()		# 用于判断是否应该退出当前Runtime
+
+    async def _run(self) -> None:
+        while True:
+            if self._stopped.is_set():
+                return
+
+            await self._runtime._process_next()  # type: ignore
+
+    async def stop(self) -> None:
+        """立即退出，强制清除消息队列"""
+        self._stopped.set()
+        self._runtime._message_queue.shutdown(immediate=True)  # type: ignore
+        await self._run_task
+
+    async def stop_when_idle(self) -> None:
+        """等待消息队列没有待处理消息后退出"""
+        await self._runtime._message_queue.join()  # type: ignore
+        self._stopped.set()
+        self._runtime._message_queue.shutdown(immediate=True)  # type: ignore
+        await self._run_task
+
+    async def stop_when(self, condition: Callable[[], bool], check_period: float = 1.0) -> None:
+        """根据用户的自定义condition确定何时退出，或者执行check_period秒后强制退出"""
+        async def check_condition() -> None:
+            while not condition():
+                await asyncio.sleep(check_period)
+            await self.stop()
+
+        await asyncio.create_task(check_condition())
+```
+
+
+
+1. `_message_queue.shutdown(immediate=True)`的作用是直接清空队列中的内容
+
+2. `STAR._process_publish()/send()/response()`的三个方法最后一步均为`_message_queue.task_done()`
+
+   - 当队列中没有元素时，会自动唤醒`_message_queue.join()`的调用处
+
+   详见async.Queue
+
+3. `STAR.stop()/stop_when_idle()/stop_when()`实际上就是调用`RunContext.stop()/stop_when_idle()/stop_when()`
+
+
+
+
+
+## 10.4 注册管理
+
+### 10.4.1 注册流程
+
+```python
+    await ReceiverAgent.register(
+        runtime,
+        type="receiver_agent",
+        factory=lambda: ReceiverAgent("Receiver Agent")
+    )
+```
+
+从样例代码中开始，逐层分析调用
+
+
+
+1. `BaseAgent.register()`
+
+   ```python
+       @classmethod
+       async def register(
+           cls,
+           runtime: AgentRuntime,
+           type: str,
+           factory: Callable[[], Self | Awaitable[Self]],
+           *,
+           skip_class_subscriptions: bool = False,
+           skip_direct_message_subscription: bool = False,
+       ) -> AgentType:
+           
+           # step 1: 传入的type就是作为agent_type的值使用
+           agent_type = AgentType(type)
+           
+           # step 2: 调用runtime.register_factory()
+           agent_type = await runtime.register_factory(type=agent_type, agent_factory=factory, expected_class=cls)
+   		
+           ...
+   		
+           # serializer 相关
+           # TODO: deduplication
+           for _message_type, serializer in cls._handles_types():
+               runtime.add_message_serializer(serializer)
+   
+           return agent_type
+   ```
+
+   
+
+2. `STAR.register_factory()`
+
+   （只保留核心逻辑）
+
+   ```python
+       async def register_factory(
+           self,
+           type: str | AgentType,
+           agent_factory: Callable[[], T | Awaitable[T]],
+           *,
+           expected_class: type[T] | None = None,
+       ) -> AgentType:
+           
+           # 异常处理相关
+           if isinstance(type, str):
+               type = AgentType(type)
+   
+           if type.type in self._agent_factories:
+               raise ValueError(f"Agent with type {type} already exists.")
+   		
+           # step 1: 定义装饰函数，确保无论factory是否为协程函数，均能正确创建agent instance
+           async def factory_wrapper() -> T:
+               # step 1.1: 尝试创建 
+               maybe_agent_instance = agent_factory()
+               
+               if inspect.isawaitable(maybe_agent_instance):
+                   # step 1.i1: 若传入的factory函数为coro function
+                   # 执行该coro function
+                   agent_instance = await maybe_agent_instance
+               else:
+                   # step 1.i2: 普通对象 
+                   agent_instance = maybe_agent_instance
+               return agent_instance
+   		
+           # step 2: 将装饰后的函数添加的字典工厂中，key为agent type
+           self._agent_factories[type.type] = factory_wrapper
+   
+           return type
+   ```
+
+   
+
+   结合前一步，此时逻辑上相当于
+
+   ```python
+   @factory_wrapper
+   def lambda_func():
+   	return ReceiverAgent("Receiver Agent")
+       
+   self._agent_factories["receiver_agent"] = lambda_func
+   ```
+
+   
+
+### 10.4.2 Agent构造流程
+
+**设计理念是懒惰初始化（Lazy Initialization）**
+
+- 只有当需要对应的Agent时，Runtime才调用agent factory去创建agent实例
+
+  即，需要实例的地方，执行`agent_instance = await self._get_agent(agent_id)`
+
+
+
+1. `STAR._get_agent()`
+
+   ```python
+       async def _get_agent(self, agent_id: AgentId) -> Agent:
+           
+           # step 1: 如果已经创建了
+           if agent_id in self._instantiated_agents:
+               return self._instantiated_agents[agent_id]
+   		
+           # step 2: agent factory 的字典工厂中找不到
+           if agent_id.type not in self._agent_factories:
+               raise LookupError(f"Agent with name {agent_id.type} not found.")
+   		
+           # step 3: 获取agent type对应的factory函数
+           agent_factory = self._agent_factories[agent_id.type]
+           
+           # step 4: 执行该factory函数
+           # 简化理解就是 agent = await factory()
+           agent = await self._invoke_agent_factory(agent_factory, agent_id)
+           
+           # step 5: 记录该实例
+           self._instantiated_agents[agent_id] = agent
+           return agent
+   ```
+
+2. `STAR._invoke_agent_factory()`
+
+   （主要逻辑）
+
+   ```python
+       async def _invoke_agent_factory(
+           self,
+           agent_factory: Callable[[], T | Awaitable[T]] | Callable[[AgentRuntime, AgentId], T | Awaitable[T]],
+           agent_id: AgentId,
+       ) -> T:
+   
+           if len(inspect.signature(agent_factory).parameters) == 0:
+               factory_one = cast(Callable[[], T], agent_factory)
+               agent = factory_one()
+           elif len(inspect.signature(agent_factory).parameters) == 2:
+   			# 针对有些 agent factory 函数需要传入runtime自身的情况
+               factory_two = cast(Callable[[AgentRuntime, AgentId], T], agent_factory)
+               agent = factory_two(self, agent_id)
+   
+   
+           if inspect.isawaitable(agent):
+               agent = cast(T, await agent)
+               
+           return agent
+   ```
+
+   
+
+
+
+## 10.5 信息处理核心逻辑
+
+### 10.5.1 STAR._process_next()
+
+（忽略了tracing和异常后的主要逻辑）
+
+```python
+    async def _process_next(self) -> None:
+        """Process the next message in the queue."""
+
+        # step 1: 获取一条消息
+        try:
+            message_envelope = await self._message_queue.get()
+        except QueueShutDown:
+            if self._background_exception is not None:
+                e = self._background_exception
+                self._background_exception = None
+                raise e from None
+            return
+
+        # step 2: 处理消息
+        match message_envelope:
+            # step 2.i1: SendMessageEnvelope类型
+            case SendMessageEnvelope(message=message, sender=sender, recipient=recipient, future=future):
+                # 处理发送消息
+                task = asyncio.create_task(self._process_send(message_envelope))
+                self._background_tasks.add(task)
+            
+            # step 2.i2: PublishMessageEnvelope类型
+            case PublishMessageEnvelope(
+                message=message,
+                sender=sender,
+                topic_id=topic_id,
+            ):
+                # 处理发布消息
+                task = asyncio.create_task(self._process_publish(message_envelope))
+                self._background_tasks.add(task)
+            
+            # step 2.i3: ResponseMessageEnvelope类型
+            case ResponseMessageEnvelope(message=message, sender=sender, recipient=recipient, future=future):
+                # 处理响应消息
+                task = asyncio.create_task(self._process_response(message_envelope))
+                self._background_tasks.add(task)
+
+        # step 3: 向Event Loop让出控制权
+        # Yield control to the message loop to allow other tasks to run
+        await asyncio.sleep(0)
+```
+
+
+
+同时忽略了`InterventionHandler`和用于判断是否丢弃message的逻辑
+
+- 未发现传入`InterventionHandler`的逻辑
+
+- autogen中唯一的`InterventionHandler`的具体实现`DefaultInterventionHandler`中没有处理逻辑
+
+  (`autogen_core/_intervention.py`)
+
+  ```python
+  class DefaultInterventionHandler(InterventionHandler):
+      """Simple class that provides a default implementation for all intervention
+      handler methods, that simply returns the message unchanged. Allows for easy
+      subclassing to override only the desired methods."""
+  
+      async def on_send(
+          self, message: Any, *, message_context: MessageContext, recipient: AgentId
+      ) -> Any | type[DropMessage]:
+          return message
+  
+      async def on_publish(self, message: Any, *, message_context: MessageContext) -> Any | type[DropMessage]:
+          return message
+  
+      async def on_response(self, message: Any, *, sender: AgentId, recipient: AgentId | None) -> Any | type[DropMessage]:
+          return message
+  
+  ```
+
+  
+
+
+
+### 10.5.2 STAR._process_send()
+
+（忽略了tracing和异常处理的主要逻辑）
+
+通过send方式发送的消息，`message_context.is_rpc = True` 这对于选择recipient_agent 选择 哪个message_handler()处理消息有一定影响
+
+- 如果目标agent不存在被`@message_handler`装饰的函数，会选择被`@rpc`装饰的函数
+
+```python
+async def _process_send(message_envelope):
+    
+    # step 1: 通过注册表或 agent factory 获取（被ChatAgentContainer包裹的）agent 实例
+    recipient_agent = await self._get_agent(recipient)
+    
+    # step 2： 构造message context
+    message_context = MessageContext(
+        sender=message_envelope.sender,
+        topic_id=None,
+        is_rpc=True,	# 注意此处
+        cancellation_token=message_envelope.cancellation_token,
+        message_id=message_envelope.message_id,
+    )
+    
+    # step 3：调用recipient_agent.on_message()生成响应
+    response = await recipient_agent.on_message(
+        message_envelope.message,
+        ctx=message_context,
+    )
+    
+    # step 4：放入message_queue
+    await self._message_queue.put(
+        ResponseMessageEnvelope(
+            message=response,
+            future=message_envelope.future,
+            sender=message_envelope.recipient,
+            recipient=message_envelope.sender,
+            metadata=get_telemetry_envelope_metadata(),
+        )
+    )
+    self._message_queue.task_done()		# 表明传入的消息已处理结束
+```
+
+
+
+### 10.5.3 STAR._process_publish()
+
+（忽略了tracing和异常处理的主要逻辑）
+
+通过publish方式发送的消息，`message_context.is_rpc = False` 这对于选择recipient_agent 选择 哪个message_handler()处理消息有一定影响
+
+- 如果目标agent不存在被`@message_handler`装饰的函数，会选择被`@event`装饰的函数
+
+```python
+async def _process_publish(self, message_envelope: PublishMessageEnvelope) -> None:
+    
+    # step 1: 获取当前message对应topic的所有订阅者
+    recipients = await self._subscription_manager.get_subscribed_recipients(message_envelope.topic_id)
+    
+    # step 2: 构建需要执行的tasks
+    responses: List[Awaitable[Any]] = []
+    for agent_id in recipients:
+        
+        # step 2.0: Avoid sending the message back to the sender
+        if message_envelope.sender is not None and agent_id == message_envelope.sender:
+            continue
+
+        # step 2.1: 生成MessageContext
+        message_context = MessageContext(
+            sender=message_envelope.sender,
+            topic_id=message_envelope.topic_id,
+            is_rpc=False,
+            cancellation_token=message_envelope.cancellation_token,
+            message_id=message_envelope.message_id,
+        )        
+
+        # step 2.2：获取agent实例
+        agent = await self._get_agent(agent_id)   
+
+        # step 2.3：定义一个只在当前publish内使用的_on_message函数
+        async def _on_message(agent: Agent, message_context: MessageContext) -> Any:
+
+            try:
+                # 调用agent的on_message方法
+                # 此处实际上可以获取response，但没有使用
+                return await agent.on_message(
+                    message_envelope.message,
+                    ctx=message_context,
+                )
+            except:
+                ...
+        
+        # step 2.4：构建task
+        future = _on_message(agent, message_context)
+        responses.append(future)
+    
+    # step 3：并发执行所有task    
+    await asyncio.gather(*responses)
+    self._message_queue.task_done()		# 表明传入的消息已处理结束
+```
+
+
+
+### 10.5.4 STAR._process_response()
+
+```python
+    async def _process_response(self, message_envelope: ResponseMessageEnvelope) -> None:
+
+        # 将response放入消息队列中
+        content = (
+            message_envelope.message.__dict__
+            if hasattr(message_envelope.message, "__dict__")
+            else message_envelope.message
+        )
+
+        message_envelope.future.set_result(message_envelope.message)
+        self._message_queue.task_done()		# 表明传入的消息已处理结束
+```
+
+
+
+
+
+## 10.6  简化的处理逻辑
+
+### 10.6.1 简化的核心代码
+
+```python
+class RunContext:
+
+    def __init__(self, runtime):
+        self._runtime = runtime
+        self._task = asyncio.create_task(self._run())
+
+    async def _run(self):
+        while True:
+            self._runtime._process_next()
+
+
+class SingleThreadAgentRuntime:
+
+    def __init__(self):
+        self._message_queue = asyncio.Queue()
+        self._subscription_manager = SubscriptionManager()
+        self._serialization_registry = SerializationRegistry()
+
+
+    async def _process_publish(self, message_envelope):
+        # step 1: get all the recipients subscribed to the topic
+        recipients = await self._subscription_manager.get_subscribed_recipients(message_envelope.topic_id)
+        
+        responses = []
+        for agent_id in recipients:
+            # step 1: get the recipient agent
+            agent = await self._get_agent(agent_id)
+
+            # step 2: generate the context
+            ctx = MessageContext(...)
+
+            async def _on_message(agent: Agent, message_context: MessageContext) -> Any:
+                return await agent.on_message(message_envelope.message, ctx)
+            
+            future = _on_message(agent, message_context)
+            responses.append(future)
+
+        return await asyncio.gather(*responses)
+
+    async def _process_send(self, message_envelope):
+
+        # step 1: get the recipient agent
+        recipient = message_envelope.recipient
+        recipient_agent = await self._get_agent(recipient)
+
+        # step 2: generate the context
+        ctx = MessageContext(...)
+
+        # step 3: call the recipient's on_message
+        response = await recipient_agent.on_message(message_envelope.message, ctx)
+
+        # step 4: put the response into the message queue
+        # 此处不如直接设置message_envelope.future.set_result(response)高效
+        # 但为了统一处理流程，还是放入消息队列
+        await self._message_queue.put( ResponseMessageEnvelope(response, ...) )
+
+    async def _process_response(self, message_envelope):
+        # set the result to the future if the task is done.
+        if not message_envelope.future.cancelled():
+            message_envelope.future.set_result(message_envelope.message)
+
+    async def _process_next(self):
+        
+        # step 1: get the message
+        message_envelope = await self._message_queue.get()
+
+        # step 2: use the self._intervention_handlers to pre-process the message
+        # handler(message_envelope)
+
+        # step 2: call the special process function based on the message type
+        if type(message_envelope) == "SendMessageEnvelope":
+            await self._process_send(message_envelope)
+        
+        elif type(message_envelope) == "PublishMessageEnvelope":
+            await self._process_publish(message_envelope)
+
+        elif type(message_envelope) == "ResponseMessageEnvelope":
+            await self._process_response(message_envelope)
+
+        await asyncio.sleep(0)  
+
+
+    def start(self):
+        self._run_context = RunContext(self)
+
+    def send_message(self, message, ...):
+        # step 1: create the future for get the response
+        future = asyncio.get_event_loop().create_future()
+
+        # step 2: create the message envelope
+        message_envelope = SendMessageEnvelope(message, future, ...)
+
+        # step 3: put the message into the message queue
+        self._message_queue.put(message_envelope)
+
+        # step 4: it will get the response when the future.set_result() is called
+        response = await future
+
+        return response
+```
+
+
+
+### 10.6.2 简化的核心逻辑图 
+
+```mermaid
+flowchart TD
+    A[SingleThreadAgentRuntime.start<br>启动运行时] --> B[创建RunContext]
+    B --> C[创建_run异步任务]
+    C --> D[调用_process_next]
+    
+    subgraph RunContext._run[主消息处理循环]
+        D[调用_process_next]
+    end
+
+    subgraph MessageProcessing[消息处理核心 _process_next]
+        D --每次处理一条消息--> E[从_message_queue<br>获取消息]
+        E --> F{判断消息类型}
+        
+        F -- SendMessageEnvelope --> G[_process_send]
+        F -- PublishMessageEnvelope --> H[_process_publish]
+        F -- ResponseMessageEnvelope --> I[_process_response]
+    end
+
+    subgraph SendFlow[_process_send]
+        G --> J[获取接收者agent]
+        J --> K[创建MessageContext]
+        K --> L[调用agent.on_message获取response]
+        L --> L1[根据response创建<br>ResponseMessageEnvelope]
+        L1 --> M[创建响应消息<br>放入队列]
+    end
+
+    subgraph PublishFlow[_process_publish]
+        H --> N[获取所有订阅者]
+        N --> O[遍历每个订阅者]
+        O --> P[获取agent]
+        P --> Q[创建MessageContext]
+        Q --> R[调用agent.on_message]
+    end
+
+    subgraph ResponseFlow[_process_response]
+        I --> U[检查future状态]
+        U --> V[设置future结果]
+    end
+
+    subgraph UserAPI[用户接口 send_message]
+        X[创建接收response的future] --> Y[创建SendMessageEnvelope]
+        Y --> Z[消息放入队列]
+        Z --> AA[等待future结果]
+        AA --> AB[返回响应给用户]
+    end
+
+    %% 连接线
+    M --> E
+
+    Z --> E
+    V -.-> AA
+    
+    %% 样式优化
+    linkStyle 12,13,14 stroke-dasharray: 5 5
+    linkStyle 15 stroke-dasharray: 5 5,stroke:blue
+```
+
+
+
+## 10.7 分布式
+
+**The distributed agent runtime is an experimental feature. Expect breaking changes to the API.**
+
+1. A distributed runtime, as shown in the diagram above, consists of a *host servicer* and multiple *workers*. 
+
+   - The host servicer facilitates communication between agents across workers and maintains the states of connections.
+   - The workers run agents and communicate with the host servicer via *gateways*. 
+
+   ![architecture-distributed](images/AutoGen源码分析/architecture-distributed.svg)
+
+    
+
+   
+
+
+
+
+
+# 11. Team (Group)
+
+1. 以 [`RoundRobinGroupChat`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.teams.html#autogen_agentchat.teams.RoundRobinGroupChat) 为例进行展开
+
+2. 样例代码
+
+   ```python
+   async def main() -> None:
+       model_client = OpenAIChatCompletionClient(model="gpt-4o")
+   
+       async def get_weather(location: str) -> str:
+           return f"The weather in {location} is sunny."
+   
+       assistant = AssistantAgent(
+           "Assistant",
+           model_client=model_client,
+           tools=[get_weather],
+       )
+       termination = TextMentionTermination("TERMINATE")
+       # 此处在RoundRobinGroupChat初始化时，需要传入创建好的Agent
+       team = RoundRobinGroupChat([assistant], termination_condition=termination)
+       await Console(team.run_stream(task="What's the weather in New York?"))
+   
+   
+   asyncio.run(main())
+   ```
+
+   
+
+
+
+
+
+## 11.1 核心类关系介绍
+
+1. 官方文档
+
+   - [`BaseGroupChat`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.teams.html#autogen_agentchat.teams.BaseGroupChat)
+   - [`ChatAgent`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.base.html#autogen_agentchat.base.ChatAgent)
+
+1. 各个（抽象）基类之间继承关系
+
+   核心关注`BaseGroupChat`, `ChatAgent`, `BaseGroupChatManager`, `AgentRuntime`之间关系
+
+   ```mermaid
+   classDiagram
+   
+       class TaskRunner{
+           <<Protocol>>
+           run() abs
+           run_stream() abs
+       }
+   
+   
+       class ChatAgent{
+           <<Abstract>>
+           on_messages_stream() abs
+           on_reset() abs
+           on_pause() abs
+           on_resume() abs
+           save_state() abs
+           load_state() abs
+           close() abs
+       }
+   
+       class BaseChatAgent{
+           + run()
+           + run_stream()
+       }
+   
+       class Agent{
+           <<Protocol>>
+           bind_id_and_runtime() abs
+           on_message() abs
+           save_state() abs
+           load_state() abs
+           close() abs
+       }
+   
+       class BaseAgent{
+           + on_message()
+           + send_message()
+           + publish_message()
+           + register()
+       }
+   
+       class RoutedAgent{
+           + on_message_impl()
+           + _discover_handlers() 
+       }
+   
+       class SequentialRoutedAgent{
+           + on_message_impl()
+       }
+   
+   
+       class BaseGroupChatManager{
+           select_speaker() abs
+           + handle_start()
+       }
+   
+       class Team{
+           <<Abstract>>
+           pause() abs
+           resume() abs
+           save_state() abs
+           load_state() abs
+       }
+   
+       class AgentRuntime{
+           <<Protocol>>
+           send_message() abs
+           publish_message() abs
+           register_factory() abs
+           save_state() abs
+           load_state() abs
+           add_subscription() abs
+       }
+   
+       class BaseGroupChat{
+           - _create_manager_factory() abs
+           - _create_participant_factory()
+           + run()
+           + run_stream()
+           + reset()
+           + pause()
+           + resume()
+           + save_state()
+           + load_state()
+       }
+   
+       BaseGroupChat "1" <-- "*" ChatAgent
+       BaseGroupChat  *-- BaseGroupChatManager
+       
+       TaskRunner <|-- ChatAgent
+       Team <|.. BaseGroupChat
+       TaskRunner <|-- Team
+       
+       BaseAgent <-- AgentRuntime
+       BaseGroupChat <-- AgentRuntime
+   
+       SequentialRoutedAgent <|-- BaseGroupChatManager
+       RoutedAgent <|-- SequentialRoutedAgent
+       BaseAgent <|-- RoutedAgent
+       Agent <|.. BaseAgent
+   
+       ChatAgent <|.. BaseChatAgent
+   ```
+
+
+
+
+2. 实现业务逻辑的类之间的关系
+
+   ```mermaid
+   classDiagram
+   
+       BaseChatAgent <|-- AssistantAgent
+       RoundRobinGroupChat <--"*" AssistantAgent
+       RoundRobinGroupChat *-- RoundRobinGroupChatManager
+       RoundRobinGroupChat <-- SingleThreadedAgentRuntime
+   
+       BaseAgent <|-- RoundRobinGroupChatManager
+       BaseAgent <-- SingleThreadedAgentRuntime
+   
+       class BaseChatAgent{
+           + run()
+           + run_stream()
+       }
+   
+       class RoundRobinGroupChat{
+           + _create_group_chat_manager_factory()
+           + _to_config()
+           + _from_config()
+       }
+   
+       class AssistantAgent{
+           + ...
+       }
+   
+       class BaseAgent{
+           + on_message()
+           + send_message()
+           + publish_message()
+           + register()
+       }
+   
+       class RoundRobinGroupChatManager{
+           + select_speaker()
+           + reset()
+           + save_state()
+           + load_state()
+       }
+   
+       class SingleThreadedAgentRuntime{
+           + send_message()
+           + publish_message()
+           + register_factory()
+       }
+   
+   
+   ```
+
+   
+
+   
+
+## 11.2 GroupChatManager
+
+### 11.2.1 介绍
+
+1. 相当于事实上的Group层级的Runtime，控制整个Group的运行
+
+2. UML类图
+
+   ```mermaid
+   classDiagram
+   
+       direction RL
+   
+       class Agent{
+           <<Protocol>>
+           bind_id_and_runtime() abs
+           on_message() abs
+           save_state() abs
+           load_state() abs
+           close() abs
+       }
+   
+       class BaseAgent{
+           + on_message()
+           + send_message()
+           + publish_message()
+           + register()
+       }
+   
+       class RoutedAgent{
+           + on_message_impl()
+           + _discover_handlers() 
+       }
+   
+       class SequentialRoutedAgent{
+           + on_message_impl()
+       }
+   
+   
+       class BaseGroupChatManager{
+           select_speaker() abs
+           - _signal_termination()
+           - _apply_termination_condition()
+           + handle_start()
+           + handle_group_chat_message()
+           + handle_agent_response()
+           + _transition_to_next_speakers()
+       }
+       
+       class RoundRobinGroupChatManager{
+           select_speaker()
+       }
+   
+       class SelectorGroupChatManager{
+           select_speaker()
+       }
+   
+       SequentialRoutedAgent <|-- BaseGroupChatManager
+       RoutedAgent <|-- SequentialRoutedAgent
+       BaseAgent <|-- RoutedAgent
+       Agent <|.. BaseAgent
+   
+       BaseGroupChatManager <|.. RoundRobinGroupChatManager
+       BaseGroupChatManager <|.. SelectorGroupChatManager
+   
+   
+   
+   ```
+
+   
+
+
+
+### 11.2.2 SequentialRoutedAgent
+
+相比于`RoutedAgent`，添加了一个`FIFOLock`，用于保证到达的消息能按序处理（先进先出）
+
+（`autogen_agentchat/teams/_group_chat/_sequential_routed_agent.py`）
+
+```python
+class FIFOLock:
+    """A lock that ensures coroutines acquire the lock in the order they request it."""
+
+    def __init__(self) -> None:
+        self._queue = asyncio.Queue[asyncio.Event]()
+        self._locked = False
+
+    async def acquire(self) -> None:
+        # If the lock is not held by any coroutine, set the lock to be held
+        # by the current coroutine.
+        if not self._locked:
+            self._locked = True
+            return
+
+        # If the lock is held by another coroutine, create an event and put it
+        # in the queue. Wait for the event to be set.
+        event = asyncio.Event()
+        await self._queue.put(event)
+        await event.wait()
+
+    def release(self) -> None:
+        if not self._queue.empty():
+            # If there are events in the queue, get the next event and set it.
+            # asyncio.Queue.get_nowait() 相比于 asyncio.Queue.get() 的行为，
+            # 区别在于如果队列为空，立刻抛出异常asyncio.QueueEmpty，不会阻塞
+            next_event = self._queue.get_nowait()
+            next_event.set()
+        else:
+            # If there are no events in the queue, release the lock.
+            self._locked = False
+```
+
+
+
+```python
+class SequentialRoutedAgent(RoutedAgent):
+    """A subclass of :class:`autogen_core.RoutedAgent` that ensures
+    that messages of certain types are processed sequentially
+    using a FIFO lock.
+
+    This is useful for agents that need to maintain a strict order of
+    processing messages, such as in a group chat scenario.
+    """
+
+    def __init__(self, description: str, sequential_message_types: Sequence[type[Any]]) -> None:
+        super().__init__(description=description)
+        self._fifo_lock = FIFOLock()
+        self._sequential_message_types = sequential_message_types
+
+    async def on_message_impl(self, message: Any, ctx: MessageContext) -> Any | None:
+        if any(isinstance(message, sequential_type) for sequential_type in self._sequential_message_types):
+            # Acquire the FIFO lock to ensure that this message is processed
+            # in the order it was received.
+            await self._fifo_lock.acquire()
+            try:
+                return await super().on_message_impl(message, ctx)
+            finally:
+                # Release the FIFO lock to allow the next message to be processed.
+                self._fifo_lock.release()
+        # If the message is not of a sequential type, process it normally.
+        return await super().on_message_impl(message, ctx)
+```
+
+
+
+
+
+### 11.2.3 BaseGroupChatManager简化核心代码
+
+（`/autogen_agentchat/teams/_group_chat/_base_group_chat_manager.py`）
+
+```python
+class BaseGroupChatManager(SequentialRoutedAgent, ABC):
+
+    def __init__(self, ...) -> None:
+        self._group_topic_type = group_topic_type
+        self._output_topic_type = output_topic_type
+
+        self._participant_descriptions = participant_descriptions
+        self._participant_name_to_topic_type = {...}
+
+        self._termination_condition = termination_condition
+        self._message_thread: List[BaseAgentEvent | BaseChatMessage] = []
+
+
+    @rpc
+    async def handle_start(self, message: GroupChatStart, ctx: MessageContext) -> None:
+
+        # step 1: Check if the conversation has already terminated.
+        if self._termination_condition.terminated:
+            stop_message = StopMessage(...)
+            await self._signal_termination(stop_message)
+            return
+        
+        # step 2: Output the start message
+        ...
+        for msg in message.messages:
+            await self._output_message_queue.put(msg)
+
+        # step 3: Publish the start message to the group chat topic.
+        await self.publish_message(
+            GroupChatStart(messages=message.messages),
+            topic_id=DefaultTopicId(type=self._group_topic_type),
+            cancellation_token=ctx.cancellation_token,
+        )
+
+        # step 4: Update the local message store list
+        self._message_thread.extend(messages)
+
+        # step 5: Check termination condition
+        if await self._apply_termination_condition(message.messages):
+            return
+        
+        # step 6: select and run the next speaker
+        await self._transition_to_next_speakers(ctx.cancellation_token)
+
+    @event
+    async def handle_group_chat_message(self, message: GroupChatMessage, ctx: MessageContext) -> None:
+        """Handle a group chat message by appending the content to its output message queue."""
+        await self._output_message_queue.put(message.message)
+        
+    @event
+    async def handle_agent_response(
+        self, message: GroupChatAgentResponse | GroupChatTeamResponse, 
+        ctx: MessageContext
+    ):
+        
+        # step 1: add the message to the local message store
+        ...
+        await self.update_message_thread(message)
+
+        # step 2: Check termination condition
+        if await self._apply_termination_condition(message.messages):
+            return
+        
+        # step 3: select and run the next speaker
+        await self._transition_to_next_speakers(ctx.cancellation_token)
+
+
+    async def _transition_to_next_speakers(self, cancellation_token: CancellationToken) -> None:
+        
+        # step 1: Select the next speaker(s)
+        next_speakers = await self.select_speaker(self._message_thread)
+
+        # step 2: log the selected speaker(s)
+        select_msg = SelectSpeakerEvent(content=speaker_names, source=self._name)
+        await self.publish_message(
+            GroupChatMessage(message=select_msg),
+            topic_id=DefaultTopicId(type=self._output_topic_type),
+        )
+        await self._output_message_queue.put(select_msg)
+
+        if isinstance(next_speakers, str):
+            next_speakers = [next_speakers]
+
+        # step 3: publish messages to the next speaker(s)
+        for speaker in next_speakers:
+            speaker_topic_type = self._participant_name_to_topic_type[speaker_name]
+            await self.publish_message(
+                GroupChatRequestPublish(),
+                topic_id=DefaultTopicId(type=speaker_topic_type),
+                cancellation_token=cancellation_token,
+            )
+
+    @abstractmethod
+    async def select_speaker(self, thread: Sequence[BaseAgentEvent | BaseChatMessage]) -> List[str] | str:
+        """
+        In the RoundRobinChatManager, this method selects the next speaker in a round fashion.
+        
+        current_speaker_index = self._next_speaker_index
+        self._next_speaker_index = (current_speaker_index + 1) % len(self._participant_names)
+        current_speaker = self._participant_names[current_speaker_index]
+        """
+
+        current_speaker = ...
+        return current_speaker
+
+    async def _signal_termination(self, message: StopMessage) -> None:
+        
+        # step 1: Publish the termination event to the output topic.
+        termination_event = GroupChatTermination(message=message)
+        await self.publish_message(
+            termination_event,
+            topic_id=DefaultTopicId(type=self._output_topic_type),
+        )
+
+        # step 2: Put the termination event in the output message queue.
+        await self._output_message_queue.put(termination_event)
+
+    
+    async def _apply_termination_condition(
+        self, delta: Sequence[BaseAgentEvent | BaseChatMessage], ...
+    ) -> bool:
+
+        # step 1: Check if the termination condition is already met.
+        stop_message = await self._termination_condition(delta)
+        if stop_message is not None:
+            # step 1.1: Reset the termination conditions and turn count.
+            await self._termination_condition.reset()
+            self._current_turn = 0
+
+            # step 1.2: Signal termination to all participants.
+            await self._signal_termination(stop_message)
+
+            return True
+
+        # step 2: Increment the turn count and check if max turns is reached.
+        self._current_turn += 1
+        if self._current_turn >= self._max_turns:
+            stop_message = StopMessage(...)
+
+            # step 2.1: Reset the termination conditions and turn count.
+            await self._termination_condition.reset()
+            self._current_turn = 0
+
+            # step 2.2: Signal termination to all participants.
+            await self._signal_termination(stop_message)
+
+            return True
+        
+        return False
+```
+
+
+
+
+
+### 11.2.4 select_speaker()具体实现
+
+1. `RoundRobinGroupChatManager`
+
+   ```python
+       async def select_speaker(self, thread: Sequence[BaseAgentEvent | BaseChatMessage]) -> List[str] | str:
+           """Select a speaker from the participants in a round-robin fashion.
+           """
+           current_speaker_index = self._next_speaker_index
+           self._next_speaker_index = (current_speaker_index + 1) % len(self._participant_names)
+           current_speaker = self._participant_names[current_speaker_index]
+           return current_speaker
+   ```
+
+2. `SelectorGroupChatManager`
+
+   （简化逻辑）
+
+   ```python
+       async def _select_speaker(self, roles: str, participants: List[str], max_attempts: int) -> str:
+   
+           # step 1: construct the prompt
+           model_context_messages = await self._model_context.get_messages()
+           model_context_history = self.construct_message_history(model_context_messages)
+           select_speaker_prompt = self._selector_prompt.format(
+               roles=roles, participants=str(participants), history=model_context_history
+           )
+           select_speaker_messages = [UserMessage(content=select_speaker_prompt, source="user")]
+   
+           num_attempts = 0
+           while num_attempts < max_attempts:
+               num_attempts += 1
+   
+               # step 2: call the model to select a speaker
+               response = await self._model_client.create(messages=select_speaker_messages)
+               select_speaker_messages.append(AssistantMessage(content=response.content, source="selector"))
+   
+               # step 3: parse and validate the response
+               mentions = self._mentioned_agents(response.content, self._participant_names)
+   
+               if len(mentions) == 0:
+                   feedback = f"No valid name was mentioned. Please select from: {str(participants)}."
+                   select_speaker_messages.append(UserMessage(content=feedback, source="user"))
+   
+               elif len(mentions) > 1:
+                   feedback = (f"Expected exactly one name to be mentioned. Please select only one from: {str(participants)}.")
+                   select_speaker_messages.append(UserMessage(content=feedback, source="user"))
+               
+               else:
+                   agent_name = list(mentions.keys())[0]
+                   if (
+                       not self._allow_repeated_speaker
+                       and self._previous_speaker is not None
+                       and agent_name == self._previous_speaker
+                   ):
+                       trace_logger.debug(f"Model selected the previous speaker: {agent_name} (attempt {num_attempts})")
+                       feedback = (f"Repeated speaker is not allowed, please select a different name from: {str(participants)}.")
+                       select_speaker_messages.append(UserMessage(content=feedback, source="user"))
+                   else:
+                       # Valid selection
+                       trace_logger.debug(f"Model selected a valid name: {agent_name} (attempt {num_attempts})")
+                       return agent_name
+   
+           if self._previous_speaker is not None:
+               trace_logger.warning(f"Model failed to select a speaker after {max_attempts}, using the previous speaker.")
+               return self._previous_speaker
+   
+           return participants[0]
+   ```
+
+   
+
+
+
+
+
+## 11.3 ChatAgentContainer
+
+### 11.3.1 介绍
+
+1. 问题
+
+   - `SingleThreadedAgentRuntime`针对的是`RoutedAgent`子类（拥有对message handler 动态分配能力）
+     - `BaseGroupChatManager`是`RoutedAgent`子类
+   - `AssistantAgent`是`BaseChatAgent`子类，并非`RoutedAgent`子类
+
+   如何让`AssistantAgent`能在`SingleThreadedAgentRuntime`上运行？
+
+
+
+2. UML类图
+
+   ```mermaid
+   classDiagram
+   
+       class RoutedAgent{
+           + on_message_impl()
+           + _discover_handlers() 
+       }
+   
+       class SequentialRoutedAgent{
+           + on_message_impl()
+       }
+   
+   
+       class ChatAgentContainer{
+           _agent: ChatAgent
+           _message_buffer: List[BaseChatMessage]
+           @rpc handle_start()
+           @event handle_request()
+           @event handle_agent_response()   
+           _log_message()
+       }
+   
+   
+       RoutedAgent <|-- SequentialRoutedAgent
+       SequentialRoutedAgent <|-- ChatAgentContainer
+   
+       class ChatAgent{
+           <<Abstract>>
+           + on_messages_stream() abs
+           + on_reset() abs
+           + on_pause() abs
+           + on_resume() abs
+           + save_state() abs
+           + load_state() abs
+           + close() abs
+       }
+   
+       class BaseChatAgent{
+           + run()
+           + run_stream()
+       }
+   
+       ChatAgent <|-- BaseChatAgent
+       BaseChatAgent <-- ChatAgentContainer
+   ```
+
+   
+
+
+3. 答案：对`BaseChatAgent`封装一层
+
+   ```python
+   class ChatAgentContainer(SequentialRoutedAgent):
+       def __init__(self, agent: BaseChatAgent):
+           self._agent = agent
+           
+       @message_handler/@rpc/@event
+       await def on_message(message:..., ctx:...):
+           await self._agent.run()
+   ```
+
+   
+
+4. 根据继承关系：`ChatAgentContainer.register()` 实际上是 `BaseAgent.register()`
+
+
+
+### 11.3.2 简化的核心代码
+
+（`autogen_agentchat/teams/_group_chat/_chat_agent_container.py`）
+
+```python
+class ChatAgentContainer(SequentialRoutedAgent):
+    def __init__(
+        self, parent_topic_type: str, output_topic_type: str, 
+        agent: ChatAgent | Team, message_factory: MessageFactory
+    ) -> None:
+        self._parent_topic_type = group_topic_type
+        self._output_topic_type = output_topic_type
+        self._agent = agent
+        self._message_buffer: List[BaseChatMessage] = []
+
+    @event
+    async def handle_start(self, message: GroupChatStart, ctx: MessageContext) -> None:
+        """Handle a start event by appending the content to the buffer."""
+        if message.messages is not None:
+            for msg in message.messages:
+                self._message_buffer.append(message)
+
+    @event
+    async def handle_agent_response(self, message: GroupChatAgentResponse, ctx: MessageContext) -> None:
+        """Handle an agent response event by appending the content to the buffer."""
+        self._message_buffer.append(message)            
+
+
+    @event
+    async def handle_request(self, message: GroupChatRequestPublish, ctx: MessageContext) -> None:
+        
+        # step 0: Check the agent type, 
+        #   because autogen supports both ChatAgent and Team as agent.
+        if isinstance(self._agent, Team):
+            # step 1: Create a stream from the team.
+            stream = self._agent.run_stream(
+                task=self._message_buffer,
+                cancellation_token=ctx.cancellation_token,
+                output_task_messages=False,
+            )
+
+            # step 2: Stream the response and log each message.
+            result: TaskResult | None = None
+            async for team_event in stream:
+                if isinstance(team_event, TaskResult):
+                    result = team_event
+                else:
+                    await self._log_message(team_event)   
+
+            # step 3: Publish the team response to the group chat.
+            self._message_buffer.clear()
+            await self.publish_message(
+                GroupChatTeamResponse(result=result, name=self._agent.name),
+                topic_id=DefaultTopicId(type=self._parent_topic_type),
+                cancellation_token=ctx.cancellation_token,
+            )         
+        else:
+            # step 1: Call the agent with the buffered messages and stream the response.
+            response: Response | None = None
+            async for msg in self._agent.on_messages_stream(self._message_buffer, ctx.cancellation_token):
+                await self._log_message(msg)
+                if isinstance(msg, Response):
+                    response = msg
+
+            # step 2: Clear the message buffer and publish the response.
+            self._message_buffer.clear()
+            await self.publish_message(
+                GroupChatAgentResponse(response=response, name=self._agent.name),
+                topic_id=DefaultTopicId(type=self._parent_topic_type),
+                cancellation_token=ctx.cancellation_token,
+            )
+            
+            
+    async def _log_message(self, message: BaseAgentEvent | BaseChatMessage) -> None:
+        # Log the message.
+        await self.publish_message(
+            GroupChatMessage(message=message),
+            topic_id=DefaultTopicId(type=self._output_topic_type),
+        )
+```
+
+
+
+
+
+## 11.4 GroupManager 与 ChatAgentContainer 交互
+
+注：忽略了 GroupManager 向 output_queue 中添加message的逻辑
+
+
+
+![图片2](images/AutoGen源码分析/图片2.svg)
+
+
+
+
+
+
+
+
+
+## 11.5 BaseGroupChat
+
+### 11.5.1 GroupChat介绍
+
+官方文档：[Group Chat](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/design-patterns/group-chat.html#)
+
+> 1. Group chat is a design pattern where a group of agents share a common thread of messages: **they all subscribe and publish to the same topic. **
+> 2. In a group chat, participants take turn to publish a message, and the process is sequential – **only one agent is working at a time.**
+> 3. **the order of turns is maintained by a Group Chat Manager agent**, which selects the next agent to speak upon receiving a message. 
+>    - Typically, a round-robin algorithm or a selector with an LLM model is used.
+
+
+
+(`autogen_agentchat/teams/_group_chat/_base_group_chat.py`)
+
+
+
+### 11.5.2  初始化与注册
+
+BaseGrouChat 对 Agent 是 Lazy Initialization
+
+1. 构造时的初始化
+
+   ```mermaid
+   graph TB
+   	A["RoundRobinGroupChat.__init__()"] --调用--> B["BaseGroupChat.__init__()"]
+   	B --"初始化（创建）STAR对象runtime"--> C["self._runtime"]
+   	B --"创建输出消息队列"--> D["self._output_message_queue"]
+   ```
+
+2. 运行时的初始化
+
+   ```mermaid
+   graph TB
+   	A["RoundRobinGroupChat.run_stream()"] --> B["BaseGroupChat.run_stream()"]
+   	B --调用--> C["STAR.start() 开始信息处理逻辑"]
+   	B --调用--> D["BaseGroupChat._init()"]
+   	D --调用--> E["ChatAgentContainer.register() 进行Container注册"]
+   	E --> F["添加Topic：own / group"]
+   	D --调用--> G["BaseGroupChatManager.register()"]
+   	G --> H["添加Topic: own / group / output"]
+   ```
+
+3. `STAR._agent_factories`字典工厂中保存的是什么
+
+   ```python
+   # container
+   @STAR.factory_wrapper
+   def _factory() -> ChatAgentContainer:
+       container = ChatAgentContainer(
+           BaseGroupChat._group_topic_type, 
+           BaseGroupChat._output_topic_type, 
+           agent, 
+           BaseGroupChat._message_factory
+       )
+       return container
+   
+   STAR._agent_factories[f"{participant.name}_{self._team_id}"] = _factory
+   ```
+
+   注意：**每次调用 agent factory 新创建的是ChatAgentContainer实例， 而不是assistant agent实例**
+
+   
+
+   ```python
+   # manager
+   @STAR.factory_wrapper
+   def _factory() -> RoundRobinGroupChatManager:
+       return RoundRobinGroupChatManager(
+           name,
+           group_topic_type,
+           output_topic_type,
+           participant_topic_types,
+           participant_names,
+           participant_descriptions,
+           output_message_queue,
+           termination_condition,
+           max_turns,
+           message_factory,
+           self._emit_team_events,
+       )
+   
+   
+   STAR._agent_factories[f"{self._group_chat_manager_name}_{self._team_id}"] = _factory
+   ```
+
+
+
+
+
+
+
+
+
+
+
+### 11.5.3 简化核心代码
+
+```python
+class BaseGroupChat:
+    def __init__(self, participants: List[ChatAgent | Team], ...):
+
+        self._participants = participants
+        self._output_message_queue = asyncio.Queue()
+        self._runtime = SingleThreadedAgentRuntime(...) if runtime is None else runtime
+
+        # create message factory for generating message
+        self._message_factory = MessageFactory()
+        ...
+        
+        self._group_topic_type = f"group_topic_{self._team_id}"
+        self._group_chat_manager_topic_type = f"{self._group_chat_manager_name}_{self._team_id}"
+        self._participant_topic_types: List[str] = [
+            f"{participant.name}_{self._team_id}" for participant in participants
+        ]
+        self._output_topic_type = f"output_topic_{self._team_id}"
+
+    async def _init(self):
+        
+        # step 1: register alll participants to the runtime
+        for participant in self._participants:
+
+            def factory():
+                return ChatAgentContainer(participant, ...)
+            
+            ChatAgentContainer.register(self._runtime, factory , ...)
+            
+            # step 3: add three subscription for the manager
+            # - own
+            # - group topic
+            await self._runtime.add_subscription(TypeSubscription(...))
+
+
+        # step 2: create the Manager
+        await BaseGroupChatManager.register(
+            self._runtime,
+            factorty: self._create_group_chat_manager_factory(...)
+        )
+
+        # step 3: add three subscription for the manager
+        # - manager own
+        # - group topic
+        # - output topic
+        await self._runtime.add_subscription(TypeSubscription(...))
+
+
+    async def run_stream(self, task, ...):
+
+        # step 1: create the start message list
+        messages = []
+        ...
+
+        # step 2: runtime start
+        self._runtime.start()
+
+        # step 3: call _init()
+        await self._init()
+
+        # step 4 : send the first message to the manager
+        await self._runtime.send_message(
+            GroupChatStart(messages=messages),
+            recipient=AgentId(type=self._group_chat_manager_topic_type),
+            cancellation_token=cancellation_token,
+        )
+
+        # step 5: for the message output stream 
+        while True:
+
+            # step 5.1: wait for the next message from the output queue
+            message_future = asyncio.ensure_future(self._output_message_queue.get())
+            message = await message_future
+
+            # step 5.2: if the message is termination, break the loop
+            if isinstance(message, GroupChatTermination):
+                break
+            
+            # step 5.3: output the message
+            yield message
+
+        # step 6: output the final result
+        yield TaskResult(...)
+```
+
+
+
+### 11.5.4 RoundRobinGroupChat
+
+(`autogen_agentchat/teams/_group_chat/_round_robin_group_chat.py`)
+
+```python
+class RoundRobinGroupChat(BaseGroupChat, Component[RoundRobinGroupChatConfig]):
+
+    def __init__(
+        self,
+        participants: List[ChatAgent | Team],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        termination_condition: TerminationCondition | None = None,
+        max_turns: int | None = None,
+        runtime: AgentRuntime | None = None,
+        custom_message_types: List[type[BaseAgentEvent | BaseChatMessage]] | None = None,
+        emit_team_events: bool = False,
+    ) -> None:
+        super().__init__(
+            name=name or self.DEFAULT_NAME,
+            description=description or self.DEFAULT_DESCRIPTION,
+            participants=participants,
+            group_chat_manager_name="RoundRobinGroupChatManager",
+            group_chat_manager_class=RoundRobinGroupChatManager,
+            termination_condition=termination_condition,
+            max_turns=max_turns,
+            runtime=runtime,
+            custom_message_types=custom_message_types,
+            emit_team_events=emit_team_events,
+        )
+
+    def _create_group_chat_manager_factory(
+        self, ...
+    ) -> Callable[[], RoundRobinGroupChatManager]:
+        def _factory() -> RoundRobinGroupChatManager:
+            return RoundRobinGroupChatManager(
+                name,
+                group_topic_type,
+                output_topic_type,
+                participant_topic_types,
+                participant_names,
+                participant_descriptions,
+                output_message_queue,
+                termination_condition,
+                max_turns,
+                message_factory,
+                self._emit_team_events,
+            )
+
+        return _factory
+
+    def _to_config(self) -> RoundRobinGroupChatConfig:
+        ...
+
+    @classmethod
+    def _from_config(cls, config: RoundRobinGroupChatConfig) -> Self:
+        ...
+```
+
+
+
+
+
+
+
+## 11.6 启停控制
+
+1. 官方文档：[Teams](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/teams.html#)
+2. 已实现 stop & reset & abort
+
+3. pause/resume在Group层面接口预留，但底层的Agent对应接口尚未实现 
+
+
+
+### 11.6.1 stop
+
+1. Calling [`set()`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.conditions.html#autogen_agentchat.conditions.ExternalTermination.set) on [`ExternalTermination`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.conditions.html#autogen_agentchat.conditions.ExternalTermination) will stop the team when the current agent’s turn is over.
+
+   ```python
+   # Define a termination condition that stops the task if the critic approves.
+   text_termination = TextMentionTermination("APPROVE")
+   external_termination = ExternalTermination()
+   
+   
+   # Create a team with the primary and critic agents.
+   team = RoundRobinGroupChat([primary_agent, critic_agent], termination_condition=text_termination | external_termination)
+   
+   async def main():
+   
+       async for result in team.run_stream(
+           task="Write a short poem about the fall season."
+       ):
+           print(result)
+           external_termination.set()
+   
+   asyncio.run(main())
+   ```
+
+   
+
+2. 执行机制在于`BaseGroupChatManager`的各个`handler`中，
+
+   在调用`self._apply_termination_condition()` 会检查 termination 条件是否会满足
+
+
+
+### 11.6.3 abort 
+
+1. You can abort a call to [`run()`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.teams.html#autogen_agentchat.teams.BaseGroupChat.run) or [`run_stream()`](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.teams.html#autogen_agentchat.teams.BaseGroupChat.run_stream) during execution by setting a [`CancellationToken`](https://microsoft.github.io/autogen/stable/reference/python/autogen_core.html#autogen_core.CancellationToken) passed to the `cancellation_token` parameter.
+
+   ```python
+   async def main():
+   
+       cancellation_token = CancellationToken()
+   
+       async for result in team.run_stream(
+           task="Write a short poem about the fall season.",
+           cancellation_token=cancellation_token,
+       ):
+           print(result)
+           # Cancel the run.
+           cancellation_token.cancel()
+   
+   asyncio.run(main())
+   ```
+
+   
+
+   
+
+2. 执行`CancellationToken.cancel()`时，会按序调用对注册的future，执行`future.cancel()`，进而抛出[`CancelledError`](https://docs.python.org/3/library/asyncio-exceptions.html#asyncio.CancelledError)，最终程序中断
+
+
+
+
+
+### 11.6.4 reset/pause/resume
+
+#### 11.6.4.1 GroupChat 层级
+
+`BaseGroupChat.reset()/pause()/resume()`
+
+- `BaseGroupChat`向 manager / container 发送  `GroupChatReset`/`GroupChatPause`/`GroupChatResume`
+- `BaseAgent`中没有预置相关的`message_handler()`
+
+```python
+class BaseGroupChat:
+    async def reset(self) -> None:
+        # Send a reset messages to all participants.
+        for participant_topic_type in self._participant_topic_types:
+            await self._runtime.send_message(
+                GroupChatReset(),
+                recipient=AgentId(type=participant_topic_type, key=self._team_id),
+            )
+        # Send a reset message to the group chat manager.
+        await self._runtime.send_message(
+            GroupChatReset(),
+            recipient=AgentId(type=self._group_chat_manager_topic_type, key=self._team_id),
+        )
+
+
+
+    async def pause(self) -> None:
+        ...
+
+        # Send a pause message to all participants.
+        for participant_topic_type in self._participant_topic_types:
+            await self._runtime.send_message(
+                GroupChatPause(),
+                recipient=AgentId(type=participant_topic_type, key=self._team_id),
+            )
+        # Send a pause message to the group chat manager.
+        await self._runtime.send_message(
+            GroupChatPause(),
+            recipient=AgentId(type=self._group_chat_manager_topic_type, key=self._team_id),
+        )
+
+
+    async def resume(self) -> None:
+        # Send a resume message to all participants.
+        for participant_topic_type in self._participant_topic_types:
+            await self._runtime.send_message(
+                GroupChatResume(),
+                recipient=AgentId(type=participant_topic_type, key=self._team_id),
+            )
+        # Send a resume message to the group chat manager.
+        await self._runtime.send_message(
+            GroupChatResume(),
+            recipient=AgentId(type=self._group_chat_manager_topic_type, key=self._team_id),
+        )
+```
+
+
+
+#### 11.6.4.2 GroupChatManager 层级
+
+`BaseGroupChatManager`没有实现pause/resume
+
+```python
+class BaseGroupChatManager(SequentialRoutedAgent, ABC):
+    
+    @rpc
+    async def handle_reset(self, message: GroupChatReset, ctx: MessageContext) -> None:
+        """Reset the group chat manager. Calling :meth:`reset` to reset the group chat manager
+        and clear the message thread."""
+        await self.reset()
+        
+	@rpc
+    async def handle_pause(self, message: GroupChatPause, ctx: MessageContext) -> None:
+        """Pause the group chat manager. This is a no-op in the base class."""
+        pass
+
+    @rpc
+    async def handle_resume(self, message: GroupChatResume, ctx: MessageContext) -> None:
+        """Resume the group chat manager. This is a no-op in the base class."""
+        pass
+    
+    
+    @abstractmethod
+    async def reset(self) -> None:
+        """Reset the group chat manager."""
+        ...
+```
+
+
+
+```python
+class RoundRobinGroupChatManager(BaseGroupChatManager):
+	async def reset(self) -> None:
+        self._current_turn = 0
+        self._message_thread.clear()
+        if self._termination_condition is not None:
+            await self._termination_condition.reset()
+        self._next_speaker_index = 0
+```
+
+
+
+#### 11.6.4.3 ChatAgentContainer 层级
+
+直接调用 `ChatAgent/Team`的接口
+
+```python
+class ChatAgentContainer:
+    @rpc
+    async def handle_reset(self, message: GroupChatReset, ctx: MessageContext) -> None:
+        """Handle a reset event by resetting the agent."""
+        self._message_buffer.clear()
+        if isinstance(self._agent, Team):
+            # If the agent is a team, reset the team.
+            await self._agent.reset()
+        else:
+            await self._agent.on_reset(ctx.cancellation_token)
+
+    @rpc
+    async def handle_pause(self, message: GroupChatPause, ctx: MessageContext) -> None:
+        """Handle a pause event by pausing the agent."""
+        if isinstance(self._agent, Team):
+            # If the agent is a team, pause the team.
+            await self._agent.pause()
+        else:
+            await self._agent.on_pause(ctx.cancellation_token)
+
+    @rpc
+    async def handle_resume(self, message: GroupChatResume, ctx: MessageContext) -> None:
+        """Handle a resume event by resuming the agent."""
+        if isinstance(self._agent, Team):
+            # If the agent is a team, resume the team.
+            await self._agent.resume()
+        else:
+            await self._agent.on_resume(ctx.cancellation_token)
+```
+
+
+
+#### 11.6.4.4 Agent 层级
+
+仅实现`on_reset()`
+
+```python
+class BaseChatAgent:
+    @abstractmethod
+    async def on_reset(self, cancellation_token: CancellationToken) -> None:
+        """Resets the agent to its initialization state."""
+        ...
+
+    async def on_pause(self, cancellation_token: CancellationToken) -> None:
+        """Called when the agent is paused while running in its :meth:`on_messages` or
+        :meth:`on_messages_stream` method. This is a no-op by default in the
+        :class:`BaseChatAgent` class. Subclasses can override this method to
+        implement custom pause behavior."""
+        pass
+
+    async def on_resume(self, cancellation_token: CancellationToken) -> None:
+        """Called when the agent is resumed from a pause while running in
+        its :meth:`on_messages` or :meth:`on_messages_stream` method.
+        This is a no-op by default in the :class:`BaseChatAgent` class.
+        Subclasses can override this method to implement custom resume behavior."""
+        pass
+
+
+class AssistantAgent(BaseChatAgent):
+    async def on_reset(self, cancellation_token: CancellationToken) -> None:
+        """Reset the assistant agent to its initialization state."""
+        await self._model_context.clear()
+```
+
+
+
+#### 11.6.4.5 总结
+
+1. `pause()/resume()`底层未实现
+
+2. `team.reset()`就会清空team中的历史记录和状态
+
+3. 只要不调用 `team.reset()`或者`agent.on_reset()`消息历史就不会被清空
+
+   在此基础上，继续调用`team.run_steam()`就会利用历史记录
+
+
+
+## 11.7 简化运转流程图
+## 
+
+```mermaid
+flowchart TD
+    A[开始运行run_stream] --> B[创建初始消息列表]
+    B --> C["启动运行时runtime.start()"]
+    C --> D[调用_init初始化]
+    
+    subgraph D [初始化过程_init]
+        D1[遍历所有参与者participants] --> D2["将ChatAgentContainer的factory到runtime，<br>添加两个订阅own/group"]
+        D2 --> D1
+        D3[将BaseGroupChatManager的factory到runtime] --> D4[为manager 添加三个订阅<br>own/group/output]
+    end
+    
+    D --> E["将GroupChatStart消息<br>send给Manager"]
+    D --> F
+    subgraph F["输出队列处理循环(本模块)"]
+        F0[输出消息队列] --> F1[从输出队列中获取消息]
+        F1 -->|GroupChatTermination| F3[跳出循环]
+        F1 -->|其他消息| F4[输出消息yield message]
+        F4 --> F1
+    end
+    
+    F3 --> G[输出最终结果TaskResult]
+    G --> H[结束]
+
+    E -.-> I
+    subgraph I ["Group运转循环(其他模块中)"]
+        I1[SingleThreadAgentRuntime]
+        I2[Message Queue]
+        I3[GroupManager]
+        I4[OtherAgent]
+
+        I1 --> |send/publish| I2
+        I2 --> |"触发_process_next()"| I1
+
+        I1 --> |"调用on_message()"| I3
+        I3 --> |"调用publish()"| I1
+        
+        I1 --> |"调用on_message()"| I4
+        I4 --> |"调用publish()"| I1      
+    end
+
+    I3 -->|put| F0
+
+    
+    %% 样式定义
+    classDef default fill:#e6f3ff,stroke:#333,stroke-width:1px;
+    classDef process fill:#cce6ff,stroke:#0066cc,stroke-width:2px;
+    classDef other fill:#ffebcc,stroke:#ff9900,stroke-width:2px;
+    classDef startend fill:#ccffcc,stroke:#009900,stroke-width:2px;
+    
+    class A,H startend;
+    class B,C,E,G process;
+    class D1,D2,D3,D4,D5,F0,F1,F3,F4 process;
+    class I1,I2,I3,I4 other;
+```
 
 
 
