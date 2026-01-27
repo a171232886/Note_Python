@@ -4,24 +4,6 @@ AutoGen 框架源码解析
 
 1. 版本：autogen-core 0.7.5
 
-2. 大致目录（不断完善中）
-
-   ```mermaid
-   flowchart TB
-   	A("Team (Group)") --> C(Termination)
-   	A --> B(Agent)
-   	A --> D(RunTime)
-   	
-   	B-->E(Model Client)
-   	B-->F(WorkBench)
-   	B-->G(RunTime)
-   	B-->K(Memory/Context)
-   	
-   	H(Message) --- J("Message Handler")
-   	
-   	F-->I(Tool)
-   	
-
 
 
 # 1. Model Client
@@ -6305,3 +6287,4 @@ flowchart TD
 ```
 
  
+
